@@ -201,4 +201,11 @@ if check_password():
                         )
 
                         st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
-                        st.success
+                        st.success(f"Analiz Tamamlandı: {c_lat}, {c_lon}")
+                        
+                    except Exception as e:
+                        st.error(f"Grafik oluşturulamadı: {e}")
+                else:
+                    st.error("Uydu sunucusu yanıt vermedi. Lütfen biraz sonra tekrar deneyin.")
+        else:
+            st.error("API Bağlantı Hatası: Lütfen internet bağlantınızı ve API anahtarlarınızı kontrol edin.")
