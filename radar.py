@@ -9,6 +9,7 @@ import os
 import tifffile as tiff
 from datetime import datetime
 import re
+from collections import deque
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -141,7 +142,7 @@ def ai_rapor_kaydet(rapor):
         return False
 
 # ---------------------------
-# SESSION STATE (lat/lon artık text olarak da tutulur)
+# SESSION STATE
 # ---------------------------
 if "lat_str" not in st.session_state:
     st.session_state.lat_str = "40.104844000000"
@@ -164,13 +165,8 @@ if "Y_data" not in st.session_state:
 # HELPERS
 # ---------------------------
 def parse_coord(s: str):
-    """
-    Kullanıcı virgül ya da nokta ile yazsa da parse eder.
-    Örn: 40,1048441234 -> 40.1048441234
-    """
     s = (s or "").strip()
     s = s.replace(",", ".")
-    # sadece rakam, -, . kalsın
     if not re.fullmatch(r"-?\d+(\.\d+)?", s):
         return None
     try:
@@ -178,13 +174,60 @@ def parse_coord(s: str):
     except:
         return None
 
+def connected_components(mask: np.ndarray):
+    """
+    8-komşuluk connected components.
+    Dönen liste: her bileşen için dict:
+      pixels: list[(r,c)]
+      area: int
+      bbox: (rmin,rmax,cmin,cmax)
+    """
+    h, w = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    comps = []
+
+    neighbors = [(-1,-1),(-1,0),(-1,1),
+                 ( 0,-1),       ( 0,1),
+                 ( 1,-1),( 1,0),( 1,1)]
+
+    for r in range(h):
+        for c in range(w):
+            if mask[r, c] and not visited[r, c]:
+                q = deque()
+                q.append((r, c))
+                visited[r, c] = True
+                pixels = []
+                rmin=rmax=r
+                cmin=cmax=c
+
+                while q:
+                    rr, cc = q.popleft()
+                    pixels.append((rr, cc))
+                    if rr < rmin: rmin = rr
+                    if rr > rmax: rmax = rr
+                    if cc < cmin: cmin = cc
+                    if cc > cmax: cmax = cc
+
+                    for dr, dc in neighbors:
+                        nr, nc = rr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            if mask[nr, nc] and not visited[nr, nc]:
+                                visited[nr, nc] = True
+                                q.append((nr, nc))
+
+                comps.append({
+                    "pixels": pixels,
+                    "area": len(pixels),
+                    "bbox": (rmin, rmax, cmin, cmax)
+                })
+    return comps
+
 # ---------------------------
 # SIDEBAR
 # ---------------------------
 with st.sidebar:
     st.markdown("## 🎮 Kontrol Paneli")
 
-    # ✅ TEXT INPUT: limit yok
     lat_in = st.text_input("**Enlem (Lat)**", value=st.session_state.lat_str)
     lon_in = st.text_input("**Boylam (Lon)**", value=st.session_state.lon_str)
 
@@ -248,7 +291,7 @@ with st.sidebar:
                 st.rerun()
 
     st.markdown("---")
-    st.caption("🛰️ Turkeller Surfer Pro v3.2")
+    st.caption("🛰️ Turkeller Surfer Pro v3.3")
 
 # ---------------------------
 # MAIN UI
@@ -280,12 +323,12 @@ with col_loc3:
     """, unsafe_allow_html=True)
 
 # ---------------------------
-# TOKEN (robust + debug)
+# TOKEN
 # ---------------------------
 def get_token_debug():
     auth_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 
-    # 1) client_credentials dene
+    # client_credentials
     try:
         data = {
             "grant_type": "client_credentials",
@@ -299,7 +342,7 @@ def get_token_debug():
     except Exception as e:
         st.warning(f"⚠️ client_credentials exception: {e}")
 
-    # 2) password grant dene (secrets varsa)
+    # password grant fallback
     try:
         if "CDSE_USERNAME" in st.secrets and "CDSE_PASSWORD" in st.secrets:
             data = {
@@ -388,13 +431,12 @@ if analiz_butonu:
             eps = 1e-10
             Z_db = 10.0 * np.log10(np.maximum(Z, eps))
 
-            # --- Robust clip + normalize ---
+            # --- Robust clip ---
             valid = Z_db[~np.isnan(Z_db)]
             p1, p99 = np.percentile(valid, [1, 99])
             Z_db_clip = np.clip(Z_db, p1, p99)
-            Z_norm = (Z_db_clip - p1) / max((p99 - p1), 1e-6)
 
-            # --- z-score anomaly ---
+            # --- z-score ---
             mu = float(np.mean(Z_db_clip))
             sd = float(np.std(Z_db_clip)) if float(np.std(Z_db_clip)) > 1e-6 else 1.0
             Z_z = (Z_db_clip - mu) / sd
@@ -404,15 +446,33 @@ if analiz_butonu:
             st.session_state.X_data = X
             st.session_state.Y_data = Y
 
-            # --- anomaly mask + centroid ---
+            # --- anomaly mask + blobs ---
             anom_mask = np.abs(Z_z) >= float(anomali_esik)
-            anom_count = int(np.sum(anom_mask))
+            comps = connected_components(anom_mask)
 
-            anom_lat = None
-            anom_lon = None
-            if anom_count > 0:
-                anom_lat = float(np.mean(Y[anom_mask]))
-                anom_lon = float(np.mean(X[anom_mask]))
+            # score each component: peak_abs_z * sqrt(area)
+            ranked = []
+            for comp in comps:
+                pix = comp["pixels"]
+                rr = np.array([p[0] for p in pix], dtype=int)
+                cc = np.array([p[1] for p in pix], dtype=int)
+                peak = float(np.max(np.abs(Z_z[rr, cc]))) if len(pix) else 0.0
+                area = comp["area"]
+                score = peak * math.sqrt(max(area, 1))
+                rmin, rmax, cmin, cmax = comp["bbox"]
+                center_lat = float(np.mean(Y[rr, cc]))
+                center_lon = float(np.mean(X[rr, cc]))
+                ranked.append({
+                    "score": score,
+                    "peak_z": peak,
+                    "area": area,
+                    "bbox_rc": (rmin, rmax, cmin, cmax),
+                    "center_lat": center_lat,
+                    "center_lon": center_lon,
+                })
+
+            ranked.sort(key=lambda d: d["score"], reverse=True)
+            top3 = ranked[:3]
 
             # --- 2D + 3D side-by-side ---
             colA, colB = st.columns([1, 1])
@@ -428,26 +488,38 @@ if analiz_butonu:
                     colorbar=dict(title="VV (dB)")
                 ))
 
-                # Kontur: anomali bölgeleri
+                # kontur (anomali maskesi)
                 heat_fig.add_trace(go.Contour(
                     z=anom_mask.astype(int),
                     x=X[0, :],
                     y=Y[:, 0],
                     showscale=False,
                     contours=dict(start=0.5, end=0.5, size=1),
-                    line=dict(width=3),
+                    line=dict(width=2),
                     hoverinfo="skip",
                     name="Anomali"
                 ))
 
-                # Merkez işareti
-                if anom_lat is not None:
+                # top3 bounding box + label
+                for i, t in enumerate(top3, start=1):
+                    rmin, rmax, cmin, cmax = t["bbox_rc"]
+                    x0 = float(X[0, cmin]); x1 = float(X[0, cmax])
+                    y0 = float(Y[rmin, 0]); y1 = float(Y[rmax, 0])
+
+                    heat_fig.add_shape(
+                        type="rect",
+                        x0=min(x0, x1), x1=max(x0, x1),
+                        y0=min(y0, y1), y1=max(y0, y1),
+                        line=dict(width=3),
+                    )
                     heat_fig.add_trace(go.Scatter(
-                        x=[anom_lon], y=[anom_lat],
+                        x=[t["center_lon"]],
+                        y=[t["center_lat"]],
                         mode="markers+text",
-                        text=["🎯"], textposition="top center",
-                        marker=dict(size=14),
-                        name="Merkez"
+                        text=[f"#{i}"],
+                        textposition="top center",
+                        marker=dict(size=10),
+                        name=f"Top {i}"
                     ))
 
                 heat_fig.update_layout(
@@ -455,16 +527,20 @@ if analiz_butonu:
                     margin=dict(l=0, r=0, t=35, b=0),
                     xaxis_title="Boylam",
                     yaxis_title="Enlem",
-                    title="2D Isı Haritası + Anomali Konturu"
+                    title="2D Isı Haritası + Anomali Konturu + Top3 Kutular"
                 )
                 st.plotly_chart(heat_fig, use_container_width=True)
 
-                st.markdown("### 🧭 Anomali Özeti")
-                if anom_count == 0:
-                    st.info("Bu eşikte belirgin anomali görünmüyor. Eşiği düşürmeyi deneyebilirsin.")
+                st.markdown("### 🎯 En Güçlü 3 Anomali")
+                if not top3:
+                    st.info("Bu eşikte anomali bulunamadı. Eşiği düşürmeyi deneyebilirsin.")
                 else:
-                    st.success(f"Anomali piksel sayısı: **{anom_count}**")
-                    st.write(f"Merkez (tahmini): **{anom_lat:.6f}, {anom_lon:.6f}**")
+                    for i, t in enumerate(top3, start=1):
+                        st.success(
+                            f"#{i} | score={t['score']:.2f} | peak z={t['peak_z']:.2f} | alan={t['area']} px"
+                        )
+                        # kopyalanabilir blok
+                        st.code(f"{t['center_lat']:.8f}, {t['center_lon']:.8f}", language="text")
 
             with colB:
                 st.subheader("🧊 3D Surface (VV dB)")
@@ -493,6 +569,7 @@ if analiz_butonu:
                     height=520,
                     title="3D dB Yüzeyi"
                 )
+
                 st.plotly_chart(surf_fig, use_container_width=True)
 
             # --- Stats ---
@@ -608,4 +685,4 @@ with st.expander("📁 Geçmiş AI Raporları", expanded=False):
     else:
         st.info("Henüz kayıtlı AI raporu yok")
 
-st.caption("🛰️ Turkeller Surfer Pro v3.2 | 2D+3D Anomali | Lat/Lon Serbest Basamak")
+st.caption("🛰️ Turkeller Surfer Pro v3.3 | 2D+3D | Top3 Anomali + BBox")
