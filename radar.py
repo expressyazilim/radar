@@ -22,28 +22,22 @@ st.set_page_config(
 )
 
 # =========================
-# CSS (MOBILE RESPONSIVE) + LOGIN HEADER FIX
+# CSS (MOBILE RESPONSIVE) + HEADER FIX
 # =========================
 st.markdown(
     """
 <style>
-/* Genel arka plan */
 .main { background: linear-gradient(135deg,#2c3e50 0%,#34495e 100%) !important; color:white !important; }
 .main * { color:white !important; }
 hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
 
-/* Üst boşluk: başlık kırpılmasın */
 .block-container { padding-top: 1.4rem !important; padding-bottom: 1.2rem !important; }
-
-/* Başlıkların üstten kırpılmasını engelle */
 h1, h2, h3 { margin-top: 0.6rem !important; padding-top: 0.2rem !important; }
 
-/* Input */
 .stTextInput > div > div > input {
     background:#0d141c !important; color:white !important; border:1px solid #34495e !important;
     border-radius:10px !important; font-size:16px !important; height:44px !important; padding:6px 10px !important;
 }
-
 .stButton > button {
     background: linear-gradient(135deg,#5d6d7e 0%,#34495e 100%) !important;
     color:white !important; border:none !important; border-radius:10px !important;
@@ -54,7 +48,6 @@ h1, h2, h3 { margin-top: 0.6rem !important; padding-top: 0.2rem !important; }
     background: linear-gradient(135deg,#7f8c8d 0%,#5d6d7e 100%) !important;
     transform: translateY(-1px); transition: all 0.2s ease;
 }
-
 .small-card{
     background: rgba(0,0,0,0.18);
     border:1px solid rgba(255,255,255,0.12);
@@ -62,12 +55,10 @@ h1, h2, h3 { margin-top: 0.6rem !important; padding-top: 0.2rem !important; }
     padding:10px 12px;
     margin:8px 0;
 }
-
 .ai-card{
     background: linear-gradient(135deg,#2c3e50 0%,#1a252f 100%) !important;
     padding:14px; border-radius:12px; border:1px solid #5d6d7e !important; margin:10px 0; white-space:pre-wrap;
 }
-
 .js-plotly-plot{ background:#1a252f !important; border-radius:12px; padding:6px; }
 
 @media (max-width: 640px){
@@ -80,21 +71,19 @@ h1, h2, h3 { margin-top: 0.6rem !important; padding-top: 0.2rem !important; }
 )
 
 # =========================
-# LOGIN (PASSWORD UNCHANGED) + TRUE REMEMBER (localStorage)
+# LOGIN (PASSWORD UNCHANGED) + TRUE REMEMBER (localStorage autologin flag)
 # =========================
 APP_PASSWORD = "altin2026"
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
-# query param ile auto-login (localStorage tetikler)
-qp = st.query_params
-if (not st.session_state["authenticated"]) and (str(qp.get("autologin", "")) == "1"):
+# query param ile autologin
+if (not st.session_state["authenticated"]) and (str(st.query_params.get("autologin", "")) == "1"):
     st.session_state["authenticated"] = True
 
 def js_set_auth(flag: bool):
     val = "1" if flag else "0"
-    # localStorage set/clear
     return st.components.v1.html(
         f"""
         <script>
@@ -111,7 +100,6 @@ def js_set_auth(flag: bool):
     )
 
 def js_check_autologin():
-    # localStorage varsa URL'e autologin=1 ekleyip reload
     return st.components.v1.html(
         """
         <script>
@@ -132,15 +120,12 @@ def js_check_autologin():
     )
 
 def login():
-    # autologin kontrolü (sayfa açılınca)
     js_check_autologin()
-
     st.markdown("## 🛰️ Turkeller Surfer Pro")
-    st.caption("Mobil uyumlu sürüm | Şifre hatırlama: bu cihazda otomatik giriş (localStorage).")
+    st.caption("Mobil uyumlu | Bu cihazda hatırla: otomatik giriş (localStorage bayrağı).")
     st.markdown("---")
 
     pwd = st.text_input("**Erişim Şifresi**", type="password", key="login_pwd")
-
     remember = st.checkbox("Bu cihazda hatırla (otomatik giriş)", value=True, key="remember_chk")
 
     colA, colB = st.columns([1, 1])
@@ -148,34 +133,28 @@ def login():
         if st.button("🚀 Giriş Yap", use_container_width=True):
             if pwd == APP_PASSWORD:
                 st.session_state["authenticated"] = True
-                if remember:
-                    js_set_auth(True)
-                else:
-                    js_set_auth(False)
+                js_set_auth(bool(remember))
                 st.rerun()
             else:
                 st.error("❌ Hatalı şifre!")
     with colB:
         if st.button("🧹 Hatırlamayı Sıfırla", use_container_width=True):
             js_set_auth(False)
-            # url'den autologin temizle
             try:
                 if "autologin" in st.query_params:
                     del st.query_params["autologin"]
             except:
                 pass
-            st.success("✅ Bu cihazdaki otomatik giriş kapatıldı.")
+            st.success("✅ Otomatik giriş kapatıldı.")
 
 if not st.session_state["authenticated"]:
     login()
     st.stop()
 
-# Logout (isteğe bağlı)
 with st.expander("🔓 Oturum", expanded=False):
     if st.button("Çıkış Yap", use_container_width=True):
         js_set_auth(False)
         st.session_state["authenticated"] = False
-        # autologin temizle
         try:
             if "autologin" in st.query_params:
                 del st.query_params["autologin"]
@@ -297,7 +276,6 @@ def classic_z(x: np.ndarray):
     sd = float(np.std(valid)) if float(np.std(valid)) > 1e-9 else 1.0
     return (x - mu) / sd
 
-# ✅ FIXED BOX BLUR
 def box_blur(img: np.ndarray, k: int = 3):
     if k <= 1:
         return img
@@ -326,13 +304,50 @@ def bbox_from_latlon(lat, lon, cap_m):
     lon_f = cap_m / (40075000.0 * math.cos(math.radians(lat)) / 360.0)
     return [lon - lon_f, lat - lat_f, lon + lon_f, lat + lat_f]
 
+def estimate_relative_depth(area_px: int, peak_abs_z: float):
+    peak = max(peak_abs_z, 1e-6)
+    return float(math.sqrt(max(area_px, 1)) / peak)
+
+def weighted_peak_center(peak_r, peak_c, Zz, X, Y, win=1):
+    H, W = Zz.shape
+    r0 = max(0, peak_r - win); r1 = min(H - 1, peak_r + win)
+    c0 = max(0, peak_c - win); c1 = min(W - 1, peak_c + win)
+
+    rr, cc = np.meshgrid(np.arange(r0, r1 + 1), np.arange(c0, c1 + 1), indexing="ij")
+    w = np.abs(Zz[rr, cc]).astype(np.float64)
+    s = float(np.sum(w))
+    if s <= 1e-12:
+        return float(Y[peak_r, peak_c]), float(X[peak_r, peak_c])
+    lat = float(np.sum(w * Y[rr, cc]) / s)
+    lon = float(np.sum(w * X[rr, cc]) / s)
+    return lat, lon
+
+def save_png_heatmap(Z_db, top_list, bbox, out_path="export_map.png"):
+    plt.figure(figsize=(6, 6), dpi=160)
+    plt.imshow(Z_db, origin="lower")
+    plt.title("VV dB Heatmap")
+    plt.axis("off")
+    h, w = Z_db.shape[:2]
+    for i, t in enumerate(top_list, start=1):
+        lon = t["target_lon"]
+        lat = t["target_lat"]
+        x = int((lon - bbox[0]) / (bbox[2] - bbox[0]) * (w - 1))
+        y = int((lat - bbox[1]) / (bbox[3] - bbox[1]) * (h - 1))
+        x = max(0, min(w - 1, x))
+        y = max(0, min(h - 1, y))
+        plt.scatter([x], [y], s=30)
+        plt.text(x, y, f"{i}", fontsize=10)
+    plt.tight_layout(pad=0)
+    plt.savefig(out_path, bbox_inches="tight")
+    plt.close()
+    return out_path
+
 # =========================
 # CACHED TOKEN + FETCH
 # =========================
 @st.cache_data(ttl=45*60, show_spinner=False)
 def cached_token(client_id: str, client_secret: str, username: str | None = None, password: str | None = None):
     auth_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
-
     try:
         data = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
         r = requests.post(auth_url, data=data, timeout=30)
@@ -380,6 +395,17 @@ def fetch_s1_tiff(token: str, bbox: list[float], width: int, height: int) -> byt
     if res.status_code != 200:
         raise RuntimeError(f"HTTP {res.status_code} | {res.text[:300]}")
     return res.content
+
+def get_token_fast():
+    if "CDSE_CLIENT_ID" not in st.secrets or "CDSE_CLIENT_SECRET" not in st.secrets:
+        st.error("❌ Secrets eksik! Settings → Secrets içine CDSE_CLIENT_ID ve CDSE_CLIENT_SECRET ekle.")
+        return None
+    return cached_token(
+        st.secrets["CDSE_CLIENT_ID"],
+        st.secrets["CDSE_CLIENT_SECRET"],
+        st.secrets.get("CDSE_USERNAME"),
+        st.secrets.get("CDSE_PASSWORD"),
+    )
 
 # =========================
 # GEOLOCATION (MOBILE) via query params
@@ -465,10 +491,115 @@ def geolocation_js(sample_seconds=3.5, min_acc=80):
     """
 
 # =========================
+# ANALYSIS CORE
+# =========================
+def run_analysis(lat_center, lon_center, cap_m, res_opt, clip_lo, clip_hi, smooth_on, smooth_k, z_mode, thr, posneg):
+    token = get_token_fast()
+    if not token:
+        raise RuntimeError("Token alınamadı")
+
+    bbox = bbox_from_latlon(lat_center, lon_center, cap_m)
+    tiff_bytes = fetch_s1_tiff(token, bbox, res_opt, res_opt)
+    Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
+
+    H, W = Z.shape[:2]
+    X, Y = np.meshgrid(
+        np.linspace(bbox[0], bbox[2], W),
+        np.linspace(bbox[1], bbox[3], H),
+    )
+
+    eps = 1e-10
+    Z_db = 10.0 * np.log10(np.maximum(Z, eps))
+
+    valid = Z_db[~np.isnan(Z_db)]
+    p_lo, p_hi = np.percentile(valid, [clip_lo, clip_hi])
+    Z_db_clip = np.clip(Z_db, p_lo, p_hi)
+
+    if smooth_on and smooth_k > 1:
+        Z_db_clip = box_blur(Z_db_clip.astype(np.float32), k=int(smooth_k))
+
+    Z_z = robust_z(Z_db_clip) if z_mode.startswith("Robust") else classic_z(Z_db_clip)
+
+    if posneg:
+        pos_mask = (Z_z >= thr)
+        neg_mask = (Z_z <= -thr)
+    else:
+        pos_mask = (np.abs(Z_z) >= thr)
+        neg_mask = np.zeros_like(pos_mask, dtype=bool)
+
+    comps_pos = connected_components(pos_mask) if np.any(pos_mask) else []
+    comps_neg = connected_components(neg_mask) if np.any(neg_mask) else []
+
+    def score_components(comps, sign_label):
+        ranked = []
+        for comp in comps:
+            pix = comp["pixels"]
+            rr = np.array([p[0] for p in pix], dtype=int)
+            cc = np.array([p[1] for p in pix], dtype=int)
+
+            vals = Z_z[rr, cc]
+            if sign_label == "POS":
+                k = int(np.argmax(vals))
+                signed_peak = float(vals[k])
+            else:
+                k = int(np.argmin(vals))
+                signed_peak = float(vals[k])
+
+            peak_abs = float(abs(signed_peak))
+            area = int(comp["area"])
+            rmin, rmax, cmin, cmax = comp["bbox"]
+
+            bbox_area = int((rmax - rmin + 1) * (cmax - cmin + 1))
+            fill = (area / bbox_area) if bbox_area > 0 else 0.0
+            score = peak_abs * math.log1p(area) * (0.6 + 0.8 * fill)
+
+            peak_r = int(rr[k])
+            peak_c = int(cc[k])
+            peak_lat = float(Y[peak_r, peak_c])
+            peak_lon = float(X[peak_r, peak_c])
+
+            target_lat, target_lon = weighted_peak_center(peak_r, peak_c, Z_z, X, Y, win=1)
+
+            mean_lat = float(np.mean(Y[rr, cc]))
+            mean_lon = float(np.mean(X[rr, cc]))
+
+            rel_z = estimate_relative_depth(area, peak_abs)
+
+            ranked.append({
+                "type": sign_label,
+                "score": float(score),
+                "peak_z": float(signed_peak),
+                "area": area,
+                "fill": float(fill),
+                "bbox_rc": (int(rmin), int(rmax), int(cmin), int(cmax)),
+                "mean_lat": mean_lat,
+                "mean_lon": mean_lon,
+                "peak_lat": peak_lat,
+                "peak_lon": peak_lon,
+                "target_lat": float(target_lat),
+                "target_lon": float(target_lon),
+                "rel_depth": float(rel_z),
+            })
+        ranked.sort(key=lambda d: d["score"], reverse=True)
+        return ranked
+
+    ranked = score_components(comps_pos, "POS") + score_components(comps_neg, "NEG")
+    ranked.sort(key=lambda d: d["score"], reverse=True)
+
+    return {
+        "bbox": bbox,
+        "Z_db_clip": Z_db_clip,
+        "X": X,
+        "Y": Y,
+        "Z_z": Z_z,
+        "ranked": ranked,
+    }
+
+# =========================
 # UI
 # =========================
 st.markdown("# 🛰️ Turkeller Surfer Pro")
-st.caption("Sentinel-1 VV | Mobil uyumlu 2D+3D | TopN Anomali | Peak koordinat düzeltmesi aktif")
+st.caption("Sentinel-1 VV | Mobil uyumlu 2D+3D | TopN | Konum: weighted-peak + oto refine")
 
 with st.container():
     st.markdown('<div class="small-card">', unsafe_allow_html=True)
@@ -511,6 +642,8 @@ with st.container():
     with col10:
         posneg = st.checkbox("Pozitif/Negatif ayır", value=True)
 
+    auto_refine = st.checkbox("🎯 Oto Refine (Top1 ile tekrar tarama)", value=True)
+
     st.markdown("---")
     cA, cB = st.columns([1, 1])
     with cA:
@@ -539,149 +672,58 @@ with colA:
 with colB:
     ai_yorum_butonu = st.button("🤖 AI YORUM", use_container_width=True, disabled=(st.session_state.Z_data is None))
 
-def get_token_fast():
-    if "CDSE_CLIENT_ID" not in st.secrets or "CDSE_CLIENT_SECRET" not in st.secrets:
-        st.error("❌ Secrets eksik! Settings → Secrets içine CDSE_CLIENT_ID ve CDSE_CLIENT_SECRET ekle.")
-        return None
-    return cached_token(
-        st.secrets["CDSE_CLIENT_ID"],
-        st.secrets["CDSE_CLIENT_SECRET"],
-        st.secrets.get("CDSE_USERNAME"),
-        st.secrets.get("CDSE_PASSWORD"),
-    )
-
-def estimate_relative_depth(area_px: int, peak_abs_z: float):
-    peak = max(peak_abs_z, 1e-6)
-    return float(math.sqrt(max(area_px, 1)) / peak)
-
-def save_png_heatmap(Z_db, top_list, bbox, out_path="export_map.png"):
-    plt.figure(figsize=(6, 6), dpi=160)
-    plt.imshow(Z_db, origin="lower")
-    plt.title("VV dB Heatmap")
-    plt.axis("off")
-    h, w = Z_db.shape[:2]
-    for i, t in enumerate(top_list, start=1):
-        lon = t["peak_lon"]; lat = t["peak_lat"]  # ✅ peak'e göre çiz
-        x = int((lon - bbox[0]) / (bbox[2]-bbox[0]) * (w-1))
-        y = int((lat - bbox[1]) / (bbox[3]-bbox[1]) * (h-1))
-        x = max(0, min(w-1, x))
-        y = max(0, min(h-1, y))
-        plt.scatter([x], [y], s=30)
-        plt.text(x, y, f"{i}", fontsize=10)
-    plt.tight_layout(pad=0)
-    plt.savefig(out_path, bbox_inches="tight")
-    plt.close()
-    return out_path
-
 # =========================
 # ANALYZE
 # =========================
 if analiz_butonu:
-    token = get_token_fast()
-    if not token:
-        st.stop()
-
     with st.spinner("🛰️ Veri çekiliyor ve analiz ediliyor..."):
         try:
-            bbox = bbox_from_latlon(st.session_state.lat, st.session_state.lon, cap)
-            tiff_bytes = fetch_s1_tiff(token, bbox, res_opt, res_opt)
-            Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
+            thr = float(anomali_esik)
 
-            H, W = Z.shape[:2]
-            X, Y = np.meshgrid(
-                np.linspace(bbox[0], bbox[2], W),
-                np.linspace(bbox[1], bbox[3], H),
+            # 1) geniş tarama
+            r1 = run_analysis(
+                st.session_state.lat, st.session_state.lon, cap,
+                res_opt, clip_lo, clip_hi, smooth_on, smooth_k,
+                z_mode, thr, posneg
             )
 
-            eps = 1e-10
-            Z_db = 10.0 * np.log10(np.maximum(Z, eps))
+            ranked1 = r1["ranked"]
+            topN1 = ranked1[: int(topn)]
 
-            valid = Z_db[~np.isnan(Z_db)]
-            p_lo, p_hi = np.percentile(valid, [clip_lo, clip_hi])
-            Z_db_clip = np.clip(Z_db, p_lo, p_hi)
+            used = r1
+            refined = False
+            cap2 = None
 
-            if smooth_on and smooth_k > 1:
-                Z_db_clip = box_blur(Z_db_clip.astype(np.float32), k=int(smooth_k))
+            # 2) oto refine: top1 target merkezine daha küçük cap
+            if auto_refine and len(topN1) > 0 and cap > 25:
+                top1 = topN1[0]
+                cap2 = max(20, min(30, int(cap * 0.5)))
+                r2 = run_analysis(
+                    top1["target_lat"], top1["target_lon"], cap2,
+                    res_opt, clip_lo, clip_hi, smooth_on, smooth_k,
+                    z_mode, thr, posneg
+                )
+                used = r2
+                refined = True
 
-            Z_z = robust_z(Z_db_clip) if z_mode.startswith("Robust") else classic_z(Z_db_clip)
-
-            thr = float(anomali_esik)
-            if posneg:
-                pos_mask = (Z_z >= thr)
-                neg_mask = (Z_z <= -thr)
-            else:
-                pos_mask = (np.abs(Z_z) >= thr)
-                neg_mask = np.zeros_like(pos_mask, dtype=bool)
-
-            comps_pos = connected_components(pos_mask) if np.any(pos_mask) else []
-            comps_neg = connected_components(neg_mask) if np.any(neg_mask) else []
-
-            def score_components(comps, sign_label):
-                ranked = []
-                for comp in comps:
-                    pix = comp["pixels"]
-                    rr = np.array([p[0] for p in pix], dtype=int)
-                    cc = np.array([p[1] for p in pix], dtype=int)
-
-                    # --- peak (signed) ---
-                    vals = Z_z[rr, cc]
-                    if sign_label == "POS":
-                        k = int(np.argmax(vals))
-                        signed_peak = float(vals[k])
-                    else:
-                        k = int(np.argmin(vals))
-                        signed_peak = float(vals[k])
-
-                    peak_abs = float(abs(signed_peak))
-                    area = int(comp["area"])
-
-                    rmin, rmax, cmin, cmax = comp["bbox"]
-                    bbox_area = int((rmax - rmin + 1) * (cmax - cmin + 1))
-                    fill = (area / bbox_area) if bbox_area > 0 else 0.0
-
-                    score = peak_abs * math.log1p(area) * (0.6 + 0.8 * fill)
-
-                    # --- mean center (eski) ---
-                    mean_lat = float(np.mean(Y[rr, cc]))
-                    mean_lon = float(np.mean(X[rr, cc]))
-
-                    # ✅ peak center (yeni) — harita/odak/kopya bununla olacak
-                    peak_r = int(rr[k])
-                    peak_c = int(cc[k])
-                    peak_lat = float(Y[peak_r, peak_c])
-                    peak_lon = float(X[peak_r, peak_c])
-
-                    rel_z = estimate_relative_depth(area, peak_abs)
-
-                    ranked.append({
-                        "type": sign_label,
-                        "score": float(score),
-                        "peak_z": float(signed_peak),
-                        "area": area,
-                        "fill": float(fill),
-                        "bbox_rc": (int(rmin), int(rmax), int(cmin), int(cmax)),
-                        "mean_lat": mean_lat,
-                        "mean_lon": mean_lon,
-                        "peak_lat": peak_lat,
-                        "peak_lon": peak_lon,
-                        "rel_depth": float(rel_z),
-                    })
-                ranked.sort(key=lambda d: d["score"], reverse=True)
-                return ranked
-
-            ranked = score_components(comps_pos, "POS") + score_components(comps_neg, "NEG")
-            ranked.sort(key=lambda d: d["score"], reverse=True)
+            bbox = used["bbox"]
+            Z_db_clip = used["Z_db_clip"]
+            X = used["X"]
+            Y = used["Y"]
+            Z_z = used["Z_z"]
+            ranked = used["ranked"]
             topN = ranked[: int(topn)]
 
             st.session_state.Z_data = Z_db_clip
             st.session_state.X_data = X
             st.session_state.Y_data = Y
 
-            # =========================
-            # 2D Heatmap
-            # =========================
+            if refined:
+                st.success(f"✅ Oto Refine yapıldı: Top1 merkezine {cap2}m ile tekrar tarandı.")
+
+            # -------- 2D Heatmap
             st.markdown("---")
-            st.subheader("🗺️ 2D Heatmap (Peak merkez)")
+            st.subheader("🗺️ 2D Heatmap (target=weighted peak)")
 
             heat_fig = go.Figure()
             heat_fig.add_trace(go.Heatmap(
@@ -707,6 +749,7 @@ if analiz_butonu:
                     name="Anomali Kontur"
                 ))
 
+            H, W = Z_db_clip.shape[:2]
             for i, t in enumerate(topN, start=1):
                 rmin, rmax, cmin, cmax = t["bbox_rc"]
                 rmin = int(np.clip(rmin, 0, H-1))
@@ -725,10 +768,9 @@ if analiz_butonu:
                         line=dict(width=3),
                     )
 
-                # ✅ marker peak koordinat
                 heat_fig.add_trace(go.Scatter(
-                    x=[t["peak_lon"]],
-                    y=[t["peak_lat"]],
+                    x=[t["target_lon"]],
+                    y=[t["target_lat"]],
                     mode="markers+text",
                     text=[f"#{i}"],
                     textposition="top center",
@@ -752,13 +794,11 @@ if analiz_butonu:
                 margin=dict(l=0, r=0, t=30, b=0),
                 xaxis_title="Boylam",
                 yaxis_title="Enlem",
-                title="2D Isı Haritası + Anomali (harita/odak = PEAK)"
+                title="2D Isı Haritası + Anomali"
             )
             st.plotly_chart(heat_fig, use_container_width=True)
 
-            # =========================
-            # 3D Surface
-            # =========================
+            # -------- 3D Surface
             st.subheader("🧊 3D Surface")
             surf_fig = go.Figure(data=[go.Surface(z=Z_db_clip, x=X, y=Y)])
             surf_fig.update_layout(
@@ -768,11 +808,9 @@ if analiz_butonu:
             )
             st.plotly_chart(surf_fig, use_container_width=True)
 
-            # =========================
-            # TOPN LIST (peak kullan)
-            # =========================
+            # -------- TOPN LIST
             st.markdown("---")
-            st.subheader(f"🎯 Top {topn} Hedef (PEAK)")
+            st.subheader(f"🎯 Top {topn} Hedef (Harita/Kopya = TARGET)")
 
             if not topN:
                 st.info("Bu eşikte anomali bulunamadı. Eşiği düşürmeyi deneyebilirsin.")
@@ -784,28 +822,28 @@ if analiz_butonu:
                         f"Z(göreceli)=`{t['rel_depth']:.2f}`"
                     )
 
-                    st.caption("Kopya/harita/odak: **PEAK koordinat** (sapmayı azaltır).")
-                    st.code(f"{t['peak_lat']:.8f} {t['peak_lon']:.8f}", language="text")
+                    st.code(f"{t['target_lat']:.8f} {t['target_lon']:.8f}", language="text")
 
-                    with st.expander("İstersen Ortalama Koordinat (eski) göster", expanded=False):
+                    with st.expander("🔎 Peak / Ortalama (debug)", expanded=False):
+                        st.write("Peak:")
+                        st.code(f"{t['peak_lat']:.8f} {t['peak_lon']:.8f}", language="text")
+                        st.write("Ortalama (eski):")
                         st.code(f"{t['mean_lat']:.8f} {t['mean_lon']:.8f}", language="text")
 
                     c1, c2 = st.columns([1, 1])
                     with c1:
                         if st.button("📍 Anomaliye Git", key=f"goto_{i}", use_container_width=True):
-                            st.session_state.focus_lat = t["peak_lat"]
-                            st.session_state.focus_lon = t["peak_lon"]
+                            st.session_state.focus_lat = t["target_lat"]
+                            st.session_state.focus_lon = t["target_lon"]
                             st.session_state.focus_label = f"#{i}"
                             st.rerun()
                     with c2:
-                        maps_url = f"https://www.google.com/maps/search/?api=1&query={t['peak_lat']},{t['peak_lon']}"
+                        maps_url = f"https://www.google.com/maps/search/?api=1&query={t['target_lat']},{t['target_lon']}"
                         st.link_button("🌍 Haritada Aç", maps_url, use_container_width=True)
 
                     st.divider()
 
-            # =========================
-            # EXPORT
-            # =========================
+            # -------- EXPORT
             st.markdown("---")
             st.subheader("📤 Export")
 
@@ -833,7 +871,7 @@ if analiz_butonu:
             png_path = save_png_heatmap(Z_db_clip, topN, bbox, out_path="export_map.png")
             with open(png_path, "rb") as f:
                 st.download_button(
-                    "⬇️ Harita PNG (peak)",
+                    "⬇️ Harita PNG",
                     data=f.read(),
                     file_name=f"map_{st.session_state.lat:.4f}_{st.session_state.lon:.4f}.png",
                     mime="image/png",
@@ -938,4 +976,4 @@ with st.expander("📁 Geçmiş AI Raporları", expanded=False):
     else:
         st.info("Henüz kayıtlı AI raporu yok")
 
-st.caption("🛰️ Turkeller Surfer Pro | Peak koordinat aktif | Login hatırlama localStorage")
+st.caption("🛰️ Turkeller Surfer Pro | target=weighted peak + oto refine | login remember ok")
