@@ -27,7 +27,6 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Background + global */
 .main { background: linear-gradient(135deg,#2c3e50 0%,#34495e 100%) !important; color:white !important; padding:0.6rem; }
 .main * { color:white !important; }
 hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
@@ -36,6 +35,10 @@ hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
     background:#0d141c !important; color:white !important; border:1px solid #34495e !important;
     border-radius:10px !important; font-size:16px !important; height:44px !important; padding:6px 10px !important;
 }
+
+.stNumberInput > div > div > input,
+.stSelectbox > div > div > div,
+.stSlider > div { color:white !important; }
 
 .stButton > button {
     background: linear-gradient(135deg,#5d6d7e 0%,#34495e 100%) !important;
@@ -61,13 +64,8 @@ hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
     padding:14px; border-radius:12px; border:1px solid #5d6d7e !important; margin:10px 0; white-space:pre-wrap;
 }
 
-/* Plotly container spacing */
 .js-plotly-plot{ background:#1a252f !important; border-radius:12px; padding:6px; }
-
-/* Reduce Streamlit default top padding */
 .block-container { padding-top: 0.6rem; padding-bottom: 1.2rem; }
-
-/* Mobile tweaks */
 @media (max-width: 640px){
   .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
   .stButton > button { height: 44px !important; font-size:14px !important; }
@@ -85,13 +83,13 @@ APP_PASSWORD = "altin2026"
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "remember_session" not in st.session_state:
-    st.session_state["remember_session"] = True  # session-based remember
+    st.session_state["remember_session"] = True
 if "login_pwd_cache" not in st.session_state:
     st.session_state["login_pwd_cache"] = ""
 
 def login():
     st.markdown("## 🔐 Turkeller Surfer Pro")
-    st.caption("Mobil uyumlu sürüm | Oturum bazlı şifre hatırlama aktif.")
+    st.caption("Mobil uyumlu sürüm | Oturum bazlı şifre hatırlama.")
     st.markdown("---")
 
     default_pwd = st.session_state["login_pwd_cache"] if st.session_state["remember_session"] else ""
@@ -191,7 +189,7 @@ if "focus_lon" not in st.session_state: st.session_state.focus_lon = None
 if "focus_label" not in st.session_state: st.session_state.focus_label = None
 
 if "history" not in st.session_state:
-    st.session_state.history = []  # list of dict snapshots
+    st.session_state.history = []
 
 # =========================
 # HELPERS
@@ -208,6 +206,7 @@ def parse_coord_pair(s: str):
     parts = [p for p in s.split() if p.strip()]
     if len(parts) < 2:
         return None, None
+
     def _to_float(x):
         x = x.strip().replace(",", ".")
         if not re.fullmatch(r"-?\d+(\.\d+)?", x):
@@ -216,6 +215,7 @@ def parse_coord_pair(s: str):
             return float(x)
         except:
             return None
+
     lat = _to_float(parts[0])
     lon = _to_float(parts[1])
     if lat is None or lon is None:
@@ -223,7 +223,7 @@ def parse_coord_pair(s: str):
     return lat, lon
 
 def connected_components(mask: np.ndarray):
-    """8-neighborhood CC"""
+    """8-neighborhood connected components"""
     h, w = mask.shape
     visited = np.zeros_like(mask, dtype=bool)
     comps = []
@@ -252,7 +252,6 @@ def connected_components(mask: np.ndarray):
     return comps
 
 def robust_z(x: np.ndarray):
-    """median + MAD"""
     valid = x[~np.isnan(x)]
     if valid.size == 0:
         return x * np.nan
@@ -276,7 +275,6 @@ def box_blur(img: np.ndarray, k: int = 3):
     pad = k // 2
     a = np.pad(img, ((pad,pad),(pad,pad)), mode="edge")
     out = np.zeros_like(img, dtype=np.float32)
-    # integral image for speed
     s = np.cumsum(np.cumsum(a, axis=0), axis=1)
     h, w = img.shape
     for r in range(h):
@@ -301,7 +299,6 @@ def bbox_from_latlon(lat, lon, cap_m):
 def cached_token(client_id: str, client_secret: str, username: str | None = None, password: str | None = None):
     auth_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 
-    # client_credentials
     try:
         data = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
         r = requests.post(auth_url, data=data, timeout=30)
@@ -310,7 +307,6 @@ def cached_token(client_id: str, client_secret: str, username: str | None = None
     except:
         pass
 
-    # password fallback
     if username and password:
         try:
             data = {"grant_type": "password", "client_id": client_id, "username": username, "password": password}
@@ -354,7 +350,6 @@ def fetch_s1_tiff(token: str, bbox: list[float], width: int, height: int) -> byt
 # =========================
 # GEOLOCATION (MOBILE)
 # =========================
-# We use query params updated by JS to bring lat/lon into Streamlit
 qp = st.query_params
 
 def apply_qp_location():
@@ -371,8 +366,6 @@ def apply_qp_location():
 apply_qp_location()
 
 def geolocation_js(sample_seconds=3.5, min_acc=80):
-    # Collect multiple samples for stabilization then update URL query params
-    # Filtering by accuracy.
     return f"""
     <script>
     (function() {{
@@ -386,17 +379,14 @@ def geolocation_js(sample_seconds=3.5, min_acc=80):
           alert("Konum alınamadı. Telefon konum izni açık mı?");
           return;
         }}
-        // median for stability
         samples.sort((a,b)=>a.lat-b.lat);
         const mLat = samples[Math.floor(samples.length/2)].lat;
         samples.sort((a,b)=>a.lon-b.lon);
         const mLon = samples[Math.floor(samples.length/2)].lon;
 
-        // also compute mean for smoother result
         const meanLat = samples.reduce((s,x)=>s+x.lat,0)/samples.length;
         const meanLon = samples.reduce((s,x)=>s+x.lon,0)/samples.length;
 
-        // final: blend median+mean
         const fLat = (mLat*0.6 + meanLat*0.4);
         const fLon = (mLon*0.6 + meanLon*0.4);
 
@@ -479,7 +469,7 @@ with st.container():
     with col5:
         z_mode = st.selectbox("Z türü", ["Robust (Median+MAD)", "Klasik (Mean+Std)"], index=0)
     with col6:
-        clip_lo, clip_hi = st.slider("Clip %", 0, 10, (1, 99))
+        clip_lo, clip_hi = st.slider("Clip % (lo/hi)", 0, 99, (1, 99))
 
     col7, col8 = st.columns([1, 1])
     with col7:
@@ -493,7 +483,6 @@ with st.container():
     with col10:
         posneg = st.checkbox("Pozitif/Negatif ayır", value=True)
 
-    # location controls
     st.markdown("---")
     cA, cB = st.columns([1, 1])
     with cA:
@@ -509,21 +498,17 @@ with st.container():
     if use_geo:
         st.components.v1.html(geolocation_js(sample_seconds=3.5, min_acc=80), height=70)
 
-    # Apply manual coords if valid
     if lat_val is not None and lon_val is not None:
         st.session_state.lat = float(lat_val)
         st.session_state.lon = float(lon_val)
-    else:
+    elif "glat" not in qp:
         st.warning("⚠️ Koordinat formatı geçersiz. Örn: `40.1048440 27.7690640`")
 
-    st.markdown(
-        f"**Mevcut:** `{st.session_state.lat:.7f} {st.session_state.lon:.7f}`",
-    )
-
+    st.markdown(f"**Mevcut:** `{st.session_state.lat:.7f} {st.session_state.lon:.7f}`")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# HISTORY (QUICK LOAD)
+# HISTORY
 # =========================
 with st.expander("🕘 Son Analizler (History)", expanded=False):
     if not st.session_state.history:
@@ -543,17 +528,14 @@ with st.expander("🕘 Son Analizler (History)", expanded=False):
             st.success("✅ History yüklendi. Analiz butonuna basabilirsin.")
 
 # =========================
-# ANALYZE BUTTONS
+# BUTTONS
 # =========================
 colA, colB = st.columns([1, 1])
 with colA:
-    analiz_butonu = st.button("🔍 ANALİZ", type="primary", use_container_width=True, disabled=(lat_val is None and ("glat" not in qp)))
+    analiz_butonu = st.button("🔍 ANALİZ", type="primary", use_container_width=True)
 with colB:
     ai_yorum_butonu = st.button("🤖 AI YORUM", use_container_width=True, disabled=(st.session_state.Z_data is None))
 
-# =========================
-# TOKEN HELPER (DEBUG LIKE)
-# =========================
 def get_token_fast():
     if "CDSE_CLIENT_ID" not in st.secrets or "CDSE_CLIENT_SECRET" not in st.secrets:
         st.error("❌ Secrets eksik! Settings → Secrets içine CDSE_CLIENT_ID ve CDSE_CLIENT_SECRET ekle.")
@@ -565,31 +547,22 @@ def get_token_fast():
         st.secrets.get("CDSE_PASSWORD"),
     )
 
-# =========================
-# ANALYZE
-# =========================
 def estimate_relative_depth(area_px: int, peak_abs_z: float):
-    """
-    Sentinel-1 VV'den 'gerçek derinlik (m)' çıkarılamaz.
-    Bu yüzden: daha geniş + daha düşük peak = daha "derin" gibi bir GÖRECELİ skor.
-    """
     peak = max(peak_abs_z, 1e-6)
-    rel = (math.sqrt(max(area_px, 1)) / peak)
-    # normalize-ish
-    return float(rel)
+    return float(math.sqrt(max(area_px, 1)) / peak)
 
-def save_png_heatmap(Z_db, X, Y, top_list, bbox, out_path="export_map.png"):
+def save_png_heatmap(Z_db, top_list, bbox, out_path="export_map.png"):
     plt.figure(figsize=(6, 6), dpi=160)
     plt.imshow(Z_db, origin="lower")
     plt.title("VV dB Heatmap")
     plt.axis("off")
-    # mark centers (approx in pixel coords)
+    h, w = Z_db.shape[:2]
     for i, t in enumerate(top_list, start=1):
-        # convert lon/lat -> pixel roughly
         lon = t["center_lon"]; lat = t["center_lat"]
-        w = Z_db.shape[1]; h = Z_db.shape[0]
         x = int((lon - bbox[0]) / (bbox[2]-bbox[0]) * (w-1))
         y = int((lat - bbox[1]) / (bbox[3]-bbox[1]) * (h-1))
+        x = max(0, min(w-1, x))
+        y = max(0, min(h-1, y))
         plt.scatter([x], [y], s=30)
         plt.text(x, y, f"{i}", fontsize=10)
     plt.tight_layout(pad=0)
@@ -597,6 +570,9 @@ def save_png_heatmap(Z_db, X, Y, top_list, bbox, out_path="export_map.png"):
     plt.close()
     return out_path
 
+# =========================
+# ANALYZE
+# =========================
 if analiz_butonu:
     token = get_token_fast()
     if not token:
@@ -606,35 +582,32 @@ if analiz_butonu:
         try:
             bbox = bbox_from_latlon(st.session_state.lat, st.session_state.lon, cap)
 
-            # fetch
             tiff_bytes = fetch_s1_tiff(token, bbox, res_opt, res_opt)
             Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
 
+            # ✅ REAL TIFF DIMENSIONS (fix for out-of-bounds)
+            h, w = Z.shape[:2]
+
             X, Y = np.meshgrid(
-                np.linspace(bbox[0], bbox[2], res_opt),
-                np.linspace(bbox[1], bbox[3], res_opt),
+                np.linspace(bbox[0], bbox[2], w),
+                np.linspace(bbox[1], bbox[3], h),
             )
 
-            # VV -> dB
             eps = 1e-10
             Z_db = 10.0 * np.log10(np.maximum(Z, eps))
 
-            # clip percentiles
             valid = Z_db[~np.isnan(Z_db)]
             p_lo, p_hi = np.percentile(valid, [clip_lo, clip_hi])
             Z_db_clip = np.clip(Z_db, p_lo, p_hi)
 
-            # smoothing
             if smooth_on and smooth_k > 1:
                 Z_db_clip = box_blur(Z_db_clip.astype(np.float32), k=int(smooth_k))
 
-            # z-score
             if z_mode.startswith("Robust"):
                 Z_z = robust_z(Z_db_clip)
             else:
                 Z_z = classic_z(Z_db_clip)
 
-            # masks
             thr = float(anomali_esik)
             if posneg:
                 pos_mask = (Z_z >= thr)
@@ -653,7 +626,6 @@ if analiz_butonu:
                     rr = np.array([p[0] for p in pix], dtype=int)
                     cc = np.array([p[1] for p in pix], dtype=int)
 
-                    # signed peak
                     signed_peak = float(np.max(Z_z[rr, cc])) if sign_label == "POS" else float(np.min(Z_z[rr, cc]))
                     peak_abs = abs(signed_peak)
                     area = int(comp["area"])
@@ -661,7 +633,6 @@ if analiz_butonu:
                     bbox_area = int((rmax-rmin+1) * (cmax-cmin+1))
                     fill = (area / bbox_area) if bbox_area > 0 else 0.0
 
-                    # stable score
                     score = peak_abs * math.log1p(area) * (0.6 + 0.8*fill)
 
                     center_lat = float(np.mean(Y[rr, cc]))
@@ -676,7 +647,7 @@ if analiz_butonu:
                         "peak_abs": float(peak_abs),
                         "area": area,
                         "fill": float(fill),
-                        "bbox_rc": (rmin, rmax, cmin, cmax),
+                        "bbox_rc": (int(rmin), int(rmax), int(cmin), int(cmax)),
                         "center_lat": center_lat,
                         "center_lon": center_lon,
                         "rel_depth": float(rel_z),
@@ -684,18 +655,14 @@ if analiz_butonu:
                 ranked.sort(key=lambda d: d["score"], reverse=True)
                 return ranked
 
-            ranked = []
-            ranked += score_components(comps_pos, "POS")
-            ranked += score_components(comps_neg, "NEG")
+            ranked = score_components(comps_pos, "POS") + score_components(comps_neg, "NEG")
             ranked.sort(key=lambda d: d["score"], reverse=True)
             topN = ranked[: int(topn)]
 
-            # store for AI & view
             st.session_state.Z_data = Z_db_clip
             st.session_state.X_data = X
             st.session_state.Y_data = Y
 
-            # history snapshot
             st.session_state.history.append({
                 "t": datetime.now().strftime("%d.%m %H:%M"),
                 "lat": float(st.session_state.lat),
@@ -703,16 +670,18 @@ if analiz_butonu:
                 "cap": int(cap),
                 "res": int(res_opt),
                 "thr": float(anomali_esik),
+                "tiff_hw": (int(h), int(w)),
             })
             st.session_state.history = st.session_state.history[-30:]
 
-            # pixel uncertainty ~ bbox span / res
-            cell_m_x = (bbox[2]-bbox[0]) * (40075000.0 * math.cos(math.radians(st.session_state.lat)) / 360.0) / res_opt
-            cell_m_y = (bbox[3]-bbox[1]) * 111320.0 / res_opt
+            cell_m_x = (bbox[2]-bbox[0]) * (40075000.0 * math.cos(math.radians(st.session_state.lat)) / 360.0) / w
+            cell_m_y = (bbox[3]-bbox[1]) * 111320.0 / h
             approx_unc_m = 0.5 * math.sqrt(cell_m_x**2 + cell_m_y**2)
 
+            st.caption(f"Debug: İstenen çöz={res_opt} | Gelen TIFF={h}x{w}")
+
             # =========================
-            # PLOTS (MOBILE: STACK)
+            # 2D Heatmap
             # =========================
             st.markdown("---")
             st.subheader("🗺️ 2D Heatmap")
@@ -730,7 +699,6 @@ if analiz_butonu:
             show_cont = anomaly_view in ["BBox + Kontur", "Sadece Kontur"]
 
             if show_cont:
-                # combined mask for contour
                 mask_any = (np.abs(Z_z) >= thr) if not posneg else ((Z_z >= thr) | (Z_z <= -thr))
                 heat_fig.add_trace(go.Contour(
                     z=mask_any.astype(int),
@@ -743,9 +711,16 @@ if analiz_butonu:
                     name="Anomali Kontur"
                 ))
 
-            # TopN shapes + markers
+            # TopN
             for i, t in enumerate(topN, start=1):
                 rmin, rmax, cmin, cmax = t["bbox_rc"]
+
+                # ✅ CLIP INDICES (fix out-of-bounds)
+                rmin = int(np.clip(rmin, 0, h-1))
+                rmax = int(np.clip(rmax, 0, h-1))
+                cmin = int(np.clip(cmin, 0, w-1))
+                cmax = int(np.clip(cmax, 0, w-1))
+
                 x0 = float(X[0, cmin]); x1 = float(X[0, cmax])
                 y0 = float(Y[rmin, 0]); y1 = float(Y[rmax, 0])
 
@@ -765,17 +740,8 @@ if analiz_butonu:
                     textposition="top center",
                     marker=dict(size=10),
                     name=f"Top {i}",
-                    hovertemplate=(
-                        f"<b>#{i}</b> ({t['type']})<br>"
-                        "Lon=%{x:.6f}<br>Lat=%{y:.6f}<br>"
-                        f"score={t['score']:.2f}<br>"
-                        f"peak z={t['peak_z']:.2f}<br>"
-                        f"alan={t['area']} px<br>"
-                        f"Z(göreceli)={t['rel_depth']:.2f}<extra></extra>"
-                    )
                 ))
 
-            # Focus marker + zoom
             if st.session_state.focus_lat is not None and st.session_state.focus_lon is not None:
                 heat_fig.add_trace(go.Scatter(
                     x=[st.session_state.focus_lon],
@@ -792,7 +758,7 @@ if analiz_butonu:
                                              st.session_state.focus_lat + (bbox[3]-bbox[1])*0.25])
 
             heat_fig.update_layout(
-                height=520 if res_opt <= 200 else 560,
+                height=520,
                 margin=dict(l=0, r=0, t=30, b=0),
                 xaxis_title="Boylam",
                 yaxis_title="Enlem",
@@ -800,6 +766,9 @@ if analiz_butonu:
             )
             st.plotly_chart(heat_fig, use_container_width=True)
 
+            # =========================
+            # 3D Surface
+            # =========================
             st.subheader("🧊 3D Surface")
             surf_fig = go.Figure(data=[go.Surface(
                 z=Z_db_clip,
@@ -838,7 +807,7 @@ if analiz_butonu:
                     )
                     st.code(f"{t['center_lat']:.8f} {t['center_lon']:.8f}", language="text")
 
-                    c1, c2, c3 = st.columns([1, 1, 1])
+                    c1, c2 = st.columns([1, 1])
                     with c1:
                         if st.button("📍 Anomaliye Git", key=f"goto_{i}", use_container_width=True):
                             st.session_state.focus_lat = t["center_lat"]
@@ -848,12 +817,6 @@ if analiz_butonu:
                     with c2:
                         maps_url = f"https://www.google.com/maps/search/?api=1&query={t['center_lat']},{t['center_lon']}"
                         st.link_button("🌍 Haritada Aç", maps_url, use_container_width=True)
-                    with c3:
-                        if st.button("🧷 Odakla + Kapat", key=f"focus_close_{i}", use_container_width=True):
-                            st.session_state.focus_lat = t["center_lat"]
-                            st.session_state.focus_lon = t["center_lon"]
-                            st.session_state.focus_label = f"#{i}"
-                            st.rerun()
 
                     st.divider()
 
@@ -863,7 +826,6 @@ if analiz_butonu:
             st.markdown("---")
             st.subheader("📤 Export")
 
-            # CSV
             if ranked:
                 import pandas as pd
                 df = pd.DataFrame(ranked)
@@ -875,7 +837,6 @@ if analiz_butonu:
                     use_container_width=True
                 )
 
-            # NPY raster
             buf = io.BytesIO()
             np.save(buf, Z_db_clip)
             st.download_button(
@@ -886,8 +847,7 @@ if analiz_butonu:
                 use_container_width=True
             )
 
-            # PNG heatmap (matplotlib)
-            png_path = save_png_heatmap(Z_db_clip, X, Y, topN, bbox, out_path="export_map.png")
+            png_path = save_png_heatmap(Z_db_clip, topN, bbox, out_path="export_map.png")
             with open(png_path, "rb") as f:
                 st.download_button(
                     "⬇️ Harita PNG",
@@ -897,9 +857,6 @@ if analiz_butonu:
                     use_container_width=True
                 )
 
-            # =========================
-            # STATS
-            # =========================
             with st.expander("📊 İstatistik (dB)", expanded=False):
                 st.write(f"Ortalama: **{np.mean(Z_db_clip):.2f} dB**")
                 st.write(f"Maks: **{np.max(Z_db_clip):.2f} dB**")
@@ -912,7 +869,7 @@ if analiz_butonu:
             st.error(f"❌ Analiz exception: {e}")
 
 # =========================
-# LOCAL AI (UNCHANGED LOGIC, SMALL IMPROVE: mention relative depth)
+# LOCAL AI
 # =========================
 def yerel_ai_analizi(Z_db_data, lat, lon, cap):
     Z_clean = Z_db_data[~np.isnan(Z_db_data)]
@@ -956,7 +913,7 @@ def yerel_ai_analizi(Z_db_data, lat, lon, cap):
 
 ℹ️ Not:
 - Sentinel-1 VV verisinden gerçek “derinlik (m)” çıkarılamaz.
-- Listede gösterilen Z değeri “göreceli derinlik skoru”dur (hedefler arası kıyas içindir).
+- Listede gösterilen Z değeri “göreceli derinlik skoru”dur.
 """
     return rapor
 
