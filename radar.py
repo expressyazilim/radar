@@ -36,10 +36,6 @@ hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
     border-radius:10px !important; font-size:16px !important; height:44px !important; padding:6px 10px !important;
 }
 
-.stNumberInput > div > div > input,
-.stSelectbox > div > div > div,
-.stSlider > div { color:white !important; }
-
 .stButton > button {
     background: linear-gradient(135deg,#5d6d7e 0%,#34495e 100%) !important;
     color:white !important; border:none !important; border-radius:10px !important;
@@ -135,21 +131,6 @@ def yerleri_yukle():
     except:
         return []
 
-def yer_kaydet(isim, lat, lon):
-    yerler = yerleri_yukle()
-    yerler.append({"isim": isim, "lat": float(lat), "lon": float(lon)})
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(yerler, f, ensure_ascii=False, indent=2)
-
-def yer_sil(index):
-    yerler = yerleri_yukle()
-    if 0 <= index < len(yerler):
-        del yerler[index]
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(yerler, f, ensure_ascii=False, indent=2)
-        return True
-    return False
-
 def ai_raporlari_yukle():
     if not os.path.exists(AI_REPORTS_FILE):
         return []
@@ -188,21 +169,13 @@ if "focus_lat" not in st.session_state: st.session_state.focus_lat = None
 if "focus_lon" not in st.session_state: st.session_state.focus_lon = None
 if "focus_label" not in st.session_state: st.session_state.focus_label = None
 
-if "history" not in st.session_state:
-    st.session_state.history = []
-
 # =========================
 # HELPERS
 # =========================
 def parse_coord_pair(s: str):
-    """
-    Accept: "40.10 27.76" or "40,10 27,76" or "40.10,27.76"
-    Returns (lat, lon) or (None, None)
-    """
     if not s:
         return None, None
-    s = s.strip()
-    s = s.replace(",", " ")
+    s = s.strip().replace(",", " ")
     parts = [p for p in s.split() if p.strip()]
     if len(parts) < 2:
         return None, None
@@ -223,7 +196,6 @@ def parse_coord_pair(s: str):
     return lat, lon
 
 def connected_components(mask: np.ndarray):
-    """8-neighborhood connected components"""
     h, w = mask.shape
     visited = np.zeros_like(mask, dtype=bool)
     comps = []
@@ -268,15 +240,21 @@ def classic_z(x: np.ndarray):
     sd = float(np.std(valid)) if float(np.std(valid)) > 1e-9 else 1.0
     return (x - mu) / sd
 
+# ✅ FIXED BOX BLUR (no out-of-bounds)
 def box_blur(img: np.ndarray, k: int = 3):
-    """simple mean filter, k odd"""
     if k <= 1:
         return img
+    k = int(k)
     pad = k // 2
-    a = np.pad(img, ((pad,pad),(pad,pad)), mode="edge")
-    out = np.zeros_like(img, dtype=np.float32)
-    s = np.cumsum(np.cumsum(a, axis=0), axis=1)
+    a = np.pad(img, ((pad, pad), (pad, pad)), mode="edge").astype(np.float32)
+
+    # integral image with extra border (H+1, W+1)
+    s = np.zeros((a.shape[0] + 1, a.shape[1] + 1), dtype=np.float32)
+    s[1:, 1:] = np.cumsum(np.cumsum(a, axis=0), axis=1)
+
     h, w = img.shape
+    out = np.empty((h, w), dtype=np.float32)
+
     for r in range(h):
         r0 = r
         r1 = r + k
@@ -285,6 +263,7 @@ def box_blur(img: np.ndarray, k: int = 3):
             c1 = c + k
             total = s[r1, c1] - s[r0, c1] - s[r1, c0] + s[r0, c0]
             out[r, c] = total / (k * k)
+
     return out
 
 def bbox_from_latlon(lat, lon, cap_m):
@@ -439,7 +418,7 @@ st.markdown("# 🛰️ Turkeller Surfer Pro")
 st.caption("Sentinel-1 VV | Mobil uyumlu 2D+3D | TopN Anomali")
 
 # =========================
-# CONTROLS (MAIN, MOBILE)
+# CONTROLS
 # =========================
 with st.container():
     st.markdown('<div class="small-card">', unsafe_allow_html=True)
@@ -449,7 +428,6 @@ with st.container():
         value=st.session_state.coord_str,
         key="coord_input",
     )
-
     lat_val, lon_val = parse_coord_pair(coord_in)
     st.session_state.coord_str = coord_in
 
@@ -501,31 +479,9 @@ with st.container():
     if lat_val is not None and lon_val is not None:
         st.session_state.lat = float(lat_val)
         st.session_state.lon = float(lon_val)
-    elif "glat" not in qp:
-        st.warning("⚠️ Koordinat formatı geçersiz. Örn: `40.1048440 27.7690640`")
 
     st.markdown(f"**Mevcut:** `{st.session_state.lat:.7f} {st.session_state.lon:.7f}`")
     st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# HISTORY
-# =========================
-with st.expander("🕘 Son Analizler (History)", expanded=False):
-    if not st.session_state.history:
-        st.info("Henüz history yok.")
-    else:
-        labels = [
-            f"{i+1}) {h['t']} | {h['lat']:.5f},{h['lon']:.5f} | cap {h['cap']} | res {h['res']} | z {h['thr']}"
-            for i, h in enumerate(st.session_state.history[::-1][:10])
-        ]
-        pick = st.selectbox("Seç", ["—"] + labels, index=0)
-        if pick != "—":
-            idx = labels.index(pick)
-            h = st.session_state.history[::-1][idx]
-            st.session_state.lat = h["lat"]
-            st.session_state.lon = h["lon"]
-            st.session_state.coord_str = f"{h['lat']:.7f} {h['lon']:.7f}"
-            st.success("✅ History yüklendi. Analiz butonuna basabilirsin.")
 
 # =========================
 # BUTTONS
@@ -585,12 +541,12 @@ if analiz_butonu:
             tiff_bytes = fetch_s1_tiff(token, bbox, res_opt, res_opt)
             Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
 
-            # ✅ REAL TIFF DIMENSIONS (fix for out-of-bounds)
-            h, w = Z.shape[:2]
+            # ✅ REAL TIFF DIMENSIONS
+            H, W = Z.shape[:2]
 
             X, Y = np.meshgrid(
-                np.linspace(bbox[0], bbox[2], w),
-                np.linspace(bbox[1], bbox[3], h),
+                np.linspace(bbox[0], bbox[2], W),
+                np.linspace(bbox[1], bbox[3], H),
             )
 
             eps = 1e-10
@@ -644,7 +600,6 @@ if analiz_butonu:
                         "type": sign_label,
                         "score": float(score),
                         "peak_z": float(signed_peak),
-                        "peak_abs": float(peak_abs),
                         "area": area,
                         "fill": float(fill),
                         "bbox_rc": (int(rmin), int(rmax), int(cmin), int(cmax)),
@@ -663,23 +618,6 @@ if analiz_butonu:
             st.session_state.X_data = X
             st.session_state.Y_data = Y
 
-            st.session_state.history.append({
-                "t": datetime.now().strftime("%d.%m %H:%M"),
-                "lat": float(st.session_state.lat),
-                "lon": float(st.session_state.lon),
-                "cap": int(cap),
-                "res": int(res_opt),
-                "thr": float(anomali_esik),
-                "tiff_hw": (int(h), int(w)),
-            })
-            st.session_state.history = st.session_state.history[-30:]
-
-            cell_m_x = (bbox[2]-bbox[0]) * (40075000.0 * math.cos(math.radians(st.session_state.lat)) / 360.0) / w
-            cell_m_y = (bbox[3]-bbox[1]) * 111320.0 / h
-            approx_unc_m = 0.5 * math.sqrt(cell_m_x**2 + cell_m_y**2)
-
-            st.caption(f"Debug: İstenen çöz={res_opt} | Gelen TIFF={h}x{w}")
-
             # =========================
             # 2D Heatmap
             # =========================
@@ -692,7 +630,6 @@ if analiz_butonu:
                 x=X[0, :],
                 y=Y[:, 0],
                 colorbar=dict(title="VV (dB)"),
-                hovertemplate="Lon=%{x:.6f}<br>Lat=%{y:.6f}<br>VV(dB)=%{z:.2f}<extra></extra>"
             ))
 
             show_bbox = anomaly_view in ["BBox + Kontur", "Sadece BBox"]
@@ -711,15 +648,13 @@ if analiz_butonu:
                     name="Anomali Kontur"
                 ))
 
-            # TopN
+            # TopN markers + bbox
             for i, t in enumerate(topN, start=1):
                 rmin, rmax, cmin, cmax = t["bbox_rc"]
-
-                # ✅ CLIP INDICES (fix out-of-bounds)
-                rmin = int(np.clip(rmin, 0, h-1))
-                rmax = int(np.clip(rmax, 0, h-1))
-                cmin = int(np.clip(cmin, 0, w-1))
-                cmax = int(np.clip(cmax, 0, w-1))
+                rmin = int(np.clip(rmin, 0, H-1))
+                rmax = int(np.clip(rmax, 0, H-1))
+                cmin = int(np.clip(cmin, 0, W-1))
+                cmax = int(np.clip(cmax, 0, W-1))
 
                 x0 = float(X[0, cmin]); x1 = float(X[0, cmax])
                 y0 = float(Y[rmin, 0]); y1 = float(Y[rmax, 0])
@@ -752,17 +687,13 @@ if analiz_butonu:
                     marker=dict(size=16, symbol="x"),
                     name="Odak"
                 ))
-                heat_fig.update_xaxes(range=[st.session_state.focus_lon - (bbox[2]-bbox[0])*0.25,
-                                             st.session_state.focus_lon + (bbox[2]-bbox[0])*0.25])
-                heat_fig.update_yaxes(range=[st.session_state.focus_lat - (bbox[3]-bbox[1])*0.25,
-                                             st.session_state.focus_lat + (bbox[3]-bbox[1])*0.25])
 
             heat_fig.update_layout(
                 height=520,
                 margin=dict(l=0, r=0, t=30, b=0),
                 xaxis_title="Boylam",
                 yaxis_title="Enlem",
-                title=f"2D | ±{approx_unc_m:.1f}m piksel belirsizliği (yaklaşık)"
+                title="2D Isı Haritası + Anomali"
             )
             st.plotly_chart(heat_fig, use_container_width=True)
 
@@ -770,20 +701,8 @@ if analiz_butonu:
             # 3D Surface
             # =========================
             st.subheader("🧊 3D Surface")
-            surf_fig = go.Figure(data=[go.Surface(
-                z=Z_db_clip,
-                x=X,
-                y=Y,
-                hovertemplate="<b>Lon</b> %{x:.6f}<br><b>Lat</b> %{y:.6f}<br><b>VV(dB)</b> %{z:.2f}<extra></extra>"
-            )])
+            surf_fig = go.Figure(data=[go.Surface(z=Z_db_clip, x=X, y=Y)])
             surf_fig.update_layout(
-                scene=dict(
-                    aspectratio=dict(x=1, y=1, z=0.5),
-                    xaxis_title="Boylam",
-                    yaxis_title="Enlem",
-                    zaxis_title="VV (dB)",
-                    camera=dict(eye=dict(x=1.4, y=1.4, z=0.9)),
-                ),
                 margin=dict(l=0, r=0, b=0, t=30),
                 height=520,
                 title="3D dB Yüzeyi"
@@ -791,11 +710,10 @@ if analiz_butonu:
             st.plotly_chart(surf_fig, use_container_width=True)
 
             # =========================
-            # TOPN LIST + ACTIONS
+            # TOPN LIST
             # =========================
             st.markdown("---")
             st.subheader(f"🎯 Top {topn} Hedef")
-
             if not topN:
                 st.info("Bu eşikte anomali bulunamadı. Eşiği düşürmeyi deneyebilirsin.")
             else:
@@ -821,7 +739,7 @@ if analiz_butonu:
                     st.divider()
 
             # =========================
-            # EXPORTS
+            # EXPORT
             # =========================
             st.markdown("---")
             st.subheader("📤 Export")
@@ -856,12 +774,6 @@ if analiz_butonu:
                     mime="image/png",
                     use_container_width=True
                 )
-
-            with st.expander("📊 İstatistik (dB)", expanded=False):
-                st.write(f"Ortalama: **{np.mean(Z_db_clip):.2f} dB**")
-                st.write(f"Maks: **{np.max(Z_db_clip):.2f} dB**")
-                st.write(f"Min: **{np.min(Z_db_clip):.2f} dB**")
-                st.write(f"Std: **{np.std(Z_db_clip):.2f} dB**")
 
             st.success("✅ Analiz tamamlandı!")
 
@@ -908,12 +820,6 @@ def yerel_ai_analizi(Z_db_data, lat, lon, cap):
 
 🔍 Yorum:
 - Yüzey tipi: {yuzey}
-- Topoğrafya: {'⛰️ Engebeli' if std_db > 3 else '🏞️ Hafif engebeli' if std_db > 1.5 else '🏙️ Düz'}
-- Değişim: {'🎯 Yüksek' if (max_db-min_db) > 6 else '📊 Orta' if (max_db-min_db) > 3 else '🔄 Düşük'}
-
-ℹ️ Not:
-- Sentinel-1 VV verisinden gerçek “derinlik (m)” çıkarılamaz.
-- Listede gösterilen Z değeri “göreceli derinlik skoru”dur.
 """
     return rapor
 
@@ -955,16 +861,4 @@ if ai_yorum_butonu:
                 else:
                     st.error("❌ Kayıt başarısız!")
 
-with st.expander("📁 Geçmiş AI Raporları", expanded=False):
-    raporlar = ai_raporlari_yukle()
-    if raporlar:
-        for i, rapor in enumerate(reversed(raporlar[-5:])):
-            st.write(f"**{rapor.get('rapor_adi','Rapor')}**")
-            st.caption(f"📍 {rapor['koordinat']['enlem']:.4f}, {rapor['koordinat']['boylam']:.4f} | 📅 {rapor['tarih']}")
-            if st.button("👁️ Gör", key=f"gor_{i}", use_container_width=True):
-                st.info(rapor["ai_yorum"])
-            st.divider()
-    else:
-        st.info("Henüz kayıtlı AI raporu yok")
-
-st.caption("🛰️ Turkeller Surfer Pro | Mobil uyumlu | TopN + Odak + Export + Cache")
+st.caption("🛰️ Turkeller Surfer Pro | Mobile | Fixed smoothing out-of-bounds")
