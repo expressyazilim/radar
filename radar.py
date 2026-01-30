@@ -22,15 +22,23 @@ st.set_page_config(
 )
 
 # =========================
-# CSS (MOBILE RESPONSIVE)
+# CSS (MOBILE RESPONSIVE) + LOGIN HEADER FIX
 # =========================
 st.markdown(
     """
 <style>
-.main { background: linear-gradient(135deg,#2c3e50 0%,#34495e 100%) !important; color:white !important; padding:0.6rem; }
+/* Genel arka plan */
+.main { background: linear-gradient(135deg,#2c3e50 0%,#34495e 100%) !important; color:white !important; }
 .main * { color:white !important; }
 hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
 
+/* Üst boşluk: başlık kırpılmasın */
+.block-container { padding-top: 1.4rem !important; padding-bottom: 1.2rem !important; }
+
+/* Başlıkların üstten kırpılmasını engelle */
+h1, h2, h3 { margin-top: 0.6rem !important; padding-top: 0.2rem !important; }
+
+/* Input */
 .stTextInput > div > div > input {
     background:#0d141c !important; color:white !important; border:1px solid #34495e !important;
     border-radius:10px !important; font-size:16px !important; height:44px !important; padding:6px 10px !important;
@@ -61,7 +69,7 @@ hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
 }
 
 .js-plotly-plot{ background:#1a252f !important; border-radius:12px; padding:6px; }
-.block-container { padding-top: 0.6rem; padding-bottom: 1.2rem; }
+
 @media (max-width: 640px){
   .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
   .stButton > button { height: 44px !important; font-size:14px !important; }
@@ -72,64 +80,113 @@ hr{ border-color:#5d6d7e !important; margin:14px 0 !important; }
 )
 
 # =========================
-# LOGIN (PASSWORD UNCHANGED)
+# LOGIN (PASSWORD UNCHANGED) + TRUE REMEMBER (localStorage)
 # =========================
 APP_PASSWORD = "altin2026"
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
-if "remember_session" not in st.session_state:
-    st.session_state["remember_session"] = True
-if "login_pwd_cache" not in st.session_state:
-    st.session_state["login_pwd_cache"] = ""
+
+# query param ile auto-login (localStorage tetikler)
+qp = st.query_params
+if (not st.session_state["authenticated"]) and (str(qp.get("autologin", "")) == "1"):
+    st.session_state["authenticated"] = True
+
+def js_set_auth(flag: bool):
+    val = "1" if flag else "0"
+    # localStorage set/clear
+    return st.components.v1.html(
+        f"""
+        <script>
+          try {{
+            if ("{val}" === "1") {{
+              localStorage.setItem("turkeller_auth", "1");
+            }} else {{
+              localStorage.removeItem("turkeller_auth");
+            }}
+          }} catch(e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+
+def js_check_autologin():
+    # localStorage varsa URL'e autologin=1 ekleyip reload
+    return st.components.v1.html(
+        """
+        <script>
+        (function(){
+          try{
+            const v = localStorage.getItem("turkeller_auth");
+            const url = new URL(window.location.href);
+            const has = url.searchParams.get("autologin");
+            if (v === "1" && has !== "1"){
+              url.searchParams.set("autologin","1");
+              window.location.href = url.toString();
+            }
+          }catch(e){}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 def login():
-    st.markdown("## 🔐 Turkeller Surfer Pro")
-    st.caption("Mobil uyumlu sürüm | Oturum bazlı şifre hatırlama.")
+    # autologin kontrolü (sayfa açılınca)
+    js_check_autologin()
+
+    st.markdown("## 🛰️ Turkeller Surfer Pro")
+    st.caption("Mobil uyumlu sürüm | Şifre hatırlama: bu cihazda otomatik giriş (localStorage).")
     st.markdown("---")
 
-    default_pwd = st.session_state["login_pwd_cache"] if st.session_state["remember_session"] else ""
-    pwd = st.text_input("**Erişim Şifresi**", type="password", value=default_pwd, key="login_pwd")
+    pwd = st.text_input("**Erişim Şifresi**", type="password", key="login_pwd")
+
+    remember = st.checkbox("Bu cihazda hatırla (otomatik giriş)", value=True, key="remember_chk")
 
     colA, colB = st.columns([1, 1])
     with colA:
-        remember = st.checkbox("Bu oturumda hatırla", value=True, key="remember_chk")
-    with colB:
-        st.write("")
-
-    if st.button("🚀 Giriş Yap", use_container_width=True):
-        if pwd == APP_PASSWORD:
-            st.session_state["authenticated"] = True
-            if remember:
-                st.session_state["login_pwd_cache"] = pwd
-                st.session_state["remember_session"] = True
+        if st.button("🚀 Giriş Yap", use_container_width=True):
+            if pwd == APP_PASSWORD:
+                st.session_state["authenticated"] = True
+                if remember:
+                    js_set_auth(True)
+                else:
+                    js_set_auth(False)
+                st.rerun()
             else:
-                st.session_state["login_pwd_cache"] = ""
-                st.session_state["remember_session"] = False
-            st.rerun()
-        else:
-            st.error("❌ Hatalı şifre!")
+                st.error("❌ Hatalı şifre!")
+    with colB:
+        if st.button("🧹 Hatırlamayı Sıfırla", use_container_width=True):
+            js_set_auth(False)
+            # url'den autologin temizle
+            try:
+                if "autologin" in st.query_params:
+                    del st.query_params["autologin"]
+            except:
+                pass
+            st.success("✅ Bu cihazdaki otomatik giriş kapatıldı.")
 
 if not st.session_state["authenticated"]:
     login()
     st.stop()
 
+# Logout (isteğe bağlı)
+with st.expander("🔓 Oturum", expanded=False):
+    if st.button("Çıkış Yap", use_container_width=True):
+        js_set_auth(False)
+        st.session_state["authenticated"] = False
+        # autologin temizle
+        try:
+            if "autologin" in st.query_params:
+                del st.query_params["autologin"]
+        except:
+            pass
+        st.rerun()
+
 # =========================
 # STORAGE
 # =========================
-DB_FILE = "kayitli_yerler.json"
 AI_REPORTS_FILE = "ai_analiz_raporlari.jsonl"
-
-def yerleri_yukle():
-    if not os.path.exists(DB_FILE):
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump([], f)
-        return []
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return []
 
 def ai_raporlari_yukle():
     if not os.path.exists(AI_REPORTS_FILE):
@@ -240,7 +297,7 @@ def classic_z(x: np.ndarray):
     sd = float(np.std(valid)) if float(np.std(valid)) > 1e-9 else 1.0
     return (x - mu) / sd
 
-# ✅ FIXED BOX BLUR (no out-of-bounds)
+# ✅ FIXED BOX BLUR
 def box_blur(img: np.ndarray, k: int = 3):
     if k <= 1:
         return img
@@ -248,7 +305,6 @@ def box_blur(img: np.ndarray, k: int = 3):
     pad = k // 2
     a = np.pad(img, ((pad, pad), (pad, pad)), mode="edge").astype(np.float32)
 
-    # integral image with extra border (H+1, W+1)
     s = np.zeros((a.shape[0] + 1, a.shape[1] + 1), dtype=np.float32)
     s[1:, 1:] = np.cumsum(np.cumsum(a, axis=0), axis=1)
 
@@ -263,7 +319,6 @@ def box_blur(img: np.ndarray, k: int = 3):
             c1 = c + k
             total = s[r1, c1] - s[r0, c1] - s[r1, c0] + s[r0, c0]
             out[r, c] = total / (k * k)
-
     return out
 
 def bbox_from_latlon(lat, lon, cap_m):
@@ -327,15 +382,13 @@ def fetch_s1_tiff(token: str, bbox: list[float], width: int, height: int) -> byt
     return res.content
 
 # =========================
-# GEOLOCATION (MOBILE)
+# GEOLOCATION (MOBILE) via query params
 # =========================
-qp = st.query_params
-
 def apply_qp_location():
     try:
-        if "glat" in qp and "glon" in qp:
-            lat = float(str(qp["glat"]))
-            lon = float(str(qp["glon"]))
+        if "glat" in st.query_params and "glon" in st.query_params:
+            lat = float(str(st.query_params["glat"]))
+            lon = float(str(st.query_params["glon"]))
             st.session_state.lat = lat
             st.session_state.lon = lon
             st.session_state.coord_str = f"{lat:.7f} {lon:.7f}"
@@ -412,14 +465,11 @@ def geolocation_js(sample_seconds=3.5, min_acc=80):
     """
 
 # =========================
-# MAIN HEADER
+# UI
 # =========================
 st.markdown("# 🛰️ Turkeller Surfer Pro")
-st.caption("Sentinel-1 VV | Mobil uyumlu 2D+3D | TopN Anomali")
+st.caption("Sentinel-1 VV | Mobil uyumlu 2D+3D | TopN Anomali | Peak koordinat düzeltmesi aktif")
 
-# =========================
-# CONTROLS
-# =========================
 with st.container():
     st.markdown('<div class="small-card">', unsafe_allow_html=True)
 
@@ -483,9 +533,6 @@ with st.container():
     st.markdown(f"**Mevcut:** `{st.session_state.lat:.7f} {st.session_state.lon:.7f}`")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# =========================
-# BUTTONS
-# =========================
 colA, colB = st.columns([1, 1])
 with colA:
     analiz_butonu = st.button("🔍 ANALİZ", type="primary", use_container_width=True)
@@ -514,7 +561,7 @@ def save_png_heatmap(Z_db, top_list, bbox, out_path="export_map.png"):
     plt.axis("off")
     h, w = Z_db.shape[:2]
     for i, t in enumerate(top_list, start=1):
-        lon = t["center_lon"]; lat = t["center_lat"]
+        lon = t["peak_lon"]; lat = t["peak_lat"]  # ✅ peak'e göre çiz
         x = int((lon - bbox[0]) / (bbox[2]-bbox[0]) * (w-1))
         y = int((lat - bbox[1]) / (bbox[3]-bbox[1]) * (h-1))
         x = max(0, min(w-1, x))
@@ -537,13 +584,10 @@ if analiz_butonu:
     with st.spinner("🛰️ Veri çekiliyor ve analiz ediliyor..."):
         try:
             bbox = bbox_from_latlon(st.session_state.lat, st.session_state.lon, cap)
-
             tiff_bytes = fetch_s1_tiff(token, bbox, res_opt, res_opt)
             Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
 
-            # ✅ REAL TIFF DIMENSIONS
             H, W = Z.shape[:2]
-
             X, Y = np.meshgrid(
                 np.linspace(bbox[0], bbox[2], W),
                 np.linspace(bbox[1], bbox[3], H),
@@ -559,10 +603,7 @@ if analiz_butonu:
             if smooth_on and smooth_k > 1:
                 Z_db_clip = box_blur(Z_db_clip.astype(np.float32), k=int(smooth_k))
 
-            if z_mode.startswith("Robust"):
-                Z_z = robust_z(Z_db_clip)
-            else:
-                Z_z = classic_z(Z_db_clip)
+            Z_z = robust_z(Z_db_clip) if z_mode.startswith("Robust") else classic_z(Z_db_clip)
 
             thr = float(anomali_esik)
             if posneg:
@@ -582,17 +623,33 @@ if analiz_butonu:
                     rr = np.array([p[0] for p in pix], dtype=int)
                     cc = np.array([p[1] for p in pix], dtype=int)
 
-                    signed_peak = float(np.max(Z_z[rr, cc])) if sign_label == "POS" else float(np.min(Z_z[rr, cc]))
-                    peak_abs = abs(signed_peak)
+                    # --- peak (signed) ---
+                    vals = Z_z[rr, cc]
+                    if sign_label == "POS":
+                        k = int(np.argmax(vals))
+                        signed_peak = float(vals[k])
+                    else:
+                        k = int(np.argmin(vals))
+                        signed_peak = float(vals[k])
+
+                    peak_abs = float(abs(signed_peak))
                     area = int(comp["area"])
+
                     rmin, rmax, cmin, cmax = comp["bbox"]
-                    bbox_area = int((rmax-rmin+1) * (cmax-cmin+1))
+                    bbox_area = int((rmax - rmin + 1) * (cmax - cmin + 1))
                     fill = (area / bbox_area) if bbox_area > 0 else 0.0
 
-                    score = peak_abs * math.log1p(area) * (0.6 + 0.8*fill)
+                    score = peak_abs * math.log1p(area) * (0.6 + 0.8 * fill)
 
-                    center_lat = float(np.mean(Y[rr, cc]))
-                    center_lon = float(np.mean(X[rr, cc]))
+                    # --- mean center (eski) ---
+                    mean_lat = float(np.mean(Y[rr, cc]))
+                    mean_lon = float(np.mean(X[rr, cc]))
+
+                    # ✅ peak center (yeni) — harita/odak/kopya bununla olacak
+                    peak_r = int(rr[k])
+                    peak_c = int(cc[k])
+                    peak_lat = float(Y[peak_r, peak_c])
+                    peak_lon = float(X[peak_r, peak_c])
 
                     rel_z = estimate_relative_depth(area, peak_abs)
 
@@ -603,8 +660,10 @@ if analiz_butonu:
                         "area": area,
                         "fill": float(fill),
                         "bbox_rc": (int(rmin), int(rmax), int(cmin), int(cmax)),
-                        "center_lat": center_lat,
-                        "center_lon": center_lon,
+                        "mean_lat": mean_lat,
+                        "mean_lon": mean_lon,
+                        "peak_lat": peak_lat,
+                        "peak_lon": peak_lon,
                         "rel_depth": float(rel_z),
                     })
                 ranked.sort(key=lambda d: d["score"], reverse=True)
@@ -622,7 +681,7 @@ if analiz_butonu:
             # 2D Heatmap
             # =========================
             st.markdown("---")
-            st.subheader("🗺️ 2D Heatmap")
+            st.subheader("🗺️ 2D Heatmap (Peak merkez)")
 
             heat_fig = go.Figure()
             heat_fig.add_trace(go.Heatmap(
@@ -648,7 +707,6 @@ if analiz_butonu:
                     name="Anomali Kontur"
                 ))
 
-            # TopN markers + bbox
             for i, t in enumerate(topN, start=1):
                 rmin, rmax, cmin, cmax = t["bbox_rc"]
                 rmin = int(np.clip(rmin, 0, H-1))
@@ -667,9 +725,10 @@ if analiz_butonu:
                         line=dict(width=3),
                     )
 
+                # ✅ marker peak koordinat
                 heat_fig.add_trace(go.Scatter(
-                    x=[t["center_lon"]],
-                    y=[t["center_lat"]],
+                    x=[t["peak_lon"]],
+                    y=[t["peak_lat"]],
                     mode="markers+text",
                     text=[f"#{i}"],
                     textposition="top center",
@@ -693,7 +752,7 @@ if analiz_butonu:
                 margin=dict(l=0, r=0, t=30, b=0),
                 xaxis_title="Boylam",
                 yaxis_title="Enlem",
-                title="2D Isı Haritası + Anomali"
+                title="2D Isı Haritası + Anomali (harita/odak = PEAK)"
             )
             st.plotly_chart(heat_fig, use_container_width=True)
 
@@ -710,10 +769,11 @@ if analiz_butonu:
             st.plotly_chart(surf_fig, use_container_width=True)
 
             # =========================
-            # TOPN LIST
+            # TOPN LIST (peak kullan)
             # =========================
             st.markdown("---")
-            st.subheader(f"🎯 Top {topn} Hedef")
+            st.subheader(f"🎯 Top {topn} Hedef (PEAK)")
+
             if not topN:
                 st.info("Bu eşikte anomali bulunamadı. Eşiği düşürmeyi deneyebilirsin.")
             else:
@@ -723,17 +783,22 @@ if analiz_butonu:
                         f"**#{i} {tag}** | score=`{t['score']:.2f}` | peak z=`{t['peak_z']:.2f}` | alan=`{t['area']}` px | "
                         f"Z(göreceli)=`{t['rel_depth']:.2f}`"
                     )
-                    st.code(f"{t['center_lat']:.8f} {t['center_lon']:.8f}", language="text")
+
+                    st.caption("Kopya/harita/odak: **PEAK koordinat** (sapmayı azaltır).")
+                    st.code(f"{t['peak_lat']:.8f} {t['peak_lon']:.8f}", language="text")
+
+                    with st.expander("İstersen Ortalama Koordinat (eski) göster", expanded=False):
+                        st.code(f"{t['mean_lat']:.8f} {t['mean_lon']:.8f}", language="text")
 
                     c1, c2 = st.columns([1, 1])
                     with c1:
                         if st.button("📍 Anomaliye Git", key=f"goto_{i}", use_container_width=True):
-                            st.session_state.focus_lat = t["center_lat"]
-                            st.session_state.focus_lon = t["center_lon"]
+                            st.session_state.focus_lat = t["peak_lat"]
+                            st.session_state.focus_lon = t["peak_lon"]
                             st.session_state.focus_label = f"#{i}"
                             st.rerun()
                     with c2:
-                        maps_url = f"https://www.google.com/maps/search/?api=1&query={t['center_lat']},{t['center_lon']}"
+                        maps_url = f"https://www.google.com/maps/search/?api=1&query={t['peak_lat']},{t['peak_lon']}"
                         st.link_button("🌍 Haritada Aç", maps_url, use_container_width=True)
 
                     st.divider()
@@ -768,7 +833,7 @@ if analiz_butonu:
             png_path = save_png_heatmap(Z_db_clip, topN, bbox, out_path="export_map.png")
             with open(png_path, "rb") as f:
                 st.download_button(
-                    "⬇️ Harita PNG",
+                    "⬇️ Harita PNG (peak)",
                     data=f.read(),
                     file_name=f"map_{st.session_state.lat:.4f}_{st.session_state.lon:.4f}.png",
                     mime="image/png",
@@ -861,4 +926,16 @@ if ai_yorum_butonu:
                 else:
                     st.error("❌ Kayıt başarısız!")
 
-st.caption("🛰️ Turkeller Surfer Pro | Mobile | Fixed smoothing out-of-bounds")
+with st.expander("📁 Geçmiş AI Raporları", expanded=False):
+    raporlar = ai_raporlari_yukle()
+    if raporlar:
+        for i, rapor in enumerate(reversed(raporlar[-5:])):
+            st.write(f"**{rapor.get('rapor_adi','Rapor')}**")
+            st.caption(f"📍 {rapor['koordinat']['enlem']:.4f}, {rapor['koordinat']['boylam']:.4f} | 📅 {rapor['tarih']}")
+            if st.button("👁️ Gör", key=f"gor_{i}", use_container_width=True):
+                st.info(rapor["ai_yorum"])
+            st.divider()
+    else:
+        st.info("Henüz kayıtlı AI raporu yok")
+
+st.caption("🛰️ Turkeller Surfer Pro | Peak koordinat aktif | Login hatırlama localStorage")
