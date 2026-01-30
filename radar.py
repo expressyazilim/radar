@@ -4,47 +4,27 @@ import plotly.graph_objects as go
 import math
 import requests
 import io
-import json
-import os
 import tifffile as tiff
-from datetime import datetime
 import re
 from collections import deque
+from datetime import datetime
 
 # =========================
-# PAGE CONFIG – SAHA MODU
+# PAGE CONFIG
 # =========================
-st.set_page_config(
-    page_title="Turkeller Surfer Pro",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="Turkeller Surfer Pro", layout="centered", initial_sidebar_state="collapsed")
 
 # =========================
-# CSS – MOBILE SAFE
+# CSS
 # =========================
 st.markdown("""
 <style>
 .main { background: linear-gradient(135deg,#2c3e50 0%,#34495e 100%) !important; color:white !important; }
 .main * { color:white !important; }
 .block-container { padding-top:1.2rem !important; padding-bottom:1rem !important; }
-.stButton > button {
-    background: linear-gradient(135deg,#5d6d7e 0%,#34495e 100%) !important;
-    border-radius:10px !important;
-    height:46px !important;
-    font-weight:600 !important;
-}
-.stTextInput input {
-    background:#0d141c !important;
-    color:white !important;
-    border-radius:10px !important;
-}
-.small-card {
-    background:rgba(0,0,0,0.2);
-    border-radius:12px;
-    padding:12px;
-    margin-bottom:10px;
-}
+.stButton > button { background: linear-gradient(135deg,#5d6d7e 0%,#34495e 100%) !important; border-radius:10px !important; height:46px !important; font-weight:650 !important; width:100% !important; }
+.stTextInput input { background:#0d141c !important; color:white !important; border-radius:10px !important; }
+.small-card { background:rgba(0,0,0,0.2); border-radius:12px; padding:12px; margin-bottom:10px; border:1px solid rgba(255,255,255,0.10); }
 .js-plotly-plot{ background:#1a252f !important; border-radius:12px; }
 </style>
 """, unsafe_allow_html=True)
@@ -53,12 +33,12 @@ st.markdown("""
 # LOGIN
 # =========================
 APP_PASSWORD = "altin2026"
-
 if "auth" not in st.session_state:
     st.session_state.auth = False
 
 def login():
     st.markdown("## 🛰️ Turkeller Surfer Pro")
+    st.caption("Saha Modu | Otomatik giriş: bu cihazda hatırla")
     st.markdown("---")
     pwd = st.text_input("Şifre", type="password")
     remember = st.checkbox("Bu cihazda hatırla", value=True)
@@ -67,202 +47,401 @@ def login():
         if pwd == APP_PASSWORD:
             st.session_state.auth = True
             if remember:
-                st.components.v1.html("""
-                <script>
-                localStorage.setItem("turkeller_auth","1");
-                </script>
-                """, height=0)
+                st.components.v1.html("""<script>localStorage.setItem("turkeller_auth","1");</script>""", height=0)
             st.rerun()
         else:
             st.error("Hatalı şifre")
 
+    # autologin kontrol
     st.components.v1.html("""
     <script>
-    if (localStorage.getItem("turkeller_auth")==="1"){
-        window.location.search="?autologin=1";
-    }
+    try{
+      if (localStorage.getItem("turkeller_auth")==="1"){
+        const u=new URL(window.location.href);
+        if(u.searchParams.get("autologin")!=="1"){
+          u.searchParams.set("autologin","1");
+          window.location.href=u.toString();
+        }
+      }
+    }catch(e){}
     </script>
     """, height=0)
 
 if not st.session_state.auth:
-    if st.query_params.get("autologin")=="1":
-        st.session_state.auth=True
+    if str(st.query_params.get("autologin","")) == "1":
+        st.session_state.auth = True
         st.rerun()
     login()
     st.stop()
 
+with st.expander("🔓 Oturum", expanded=False):
+    if st.button("Çıkış Yap", use_container_width=True):
+        st.components.v1.html("""<script>localStorage.removeItem("turkeller_auth");</script>""", height=0)
+        st.session_state.auth = False
+        try:
+            if "autologin" in st.query_params:
+                del st.query_params["autologin"]
+        except:
+            pass
+        st.rerun()
+
 # =========================
 # HELPERS
 # =========================
-def parse_coord_pair(s):
+def parse_coord_pair(s: str):
     try:
-        a=s.replace(","," ").split()
-        return float(a[0]), float(a[1])
+        s = (s or "").strip().replace(",", " ")
+        parts = [p for p in s.split() if p.strip()]
+        if len(parts) < 2:
+            return None, None
+        return float(parts[0]), float(parts[1])
     except:
-        return None,None
+        return None, None
 
-def bbox_from_latlon(lat,lon,cap):
-    lat_f=cap/111320.0
-    lon_f=cap/(40075000.0*math.cos(math.radians(lat))/360.0)
-    return [lon-lon_f, lat-lat_f, lon+lon_f, lat+lat_f]
+def bbox_from_latlon(lat, lon, cap):
+    lat_f = cap / 111320.0
+    lon_f = cap / (40075000.0 * math.cos(math.radians(lat)) / 360.0)
+    return [lon - lon_f, lat - lat_f, lon + lon_f, lat + lat_f]
 
-def robust_z(x):
-    v=x[~np.isnan(x)]
-    med=np.median(v)
-    mad=np.median(np.abs(v-med))
-    d=1.4826*mad if mad>1e-9 else np.std(v)
-    return (x-med)/(d if d>1e-9 else 1)
+def robust_z(x: np.ndarray):
+    v = x[~np.isnan(x)]
+    if v.size == 0:
+        return x * np.nan
+    med = np.median(v)
+    mad = np.median(np.abs(v - med))
+    denom = (1.4826 * mad) if mad > 1e-9 else (np.std(v) if np.std(v) > 1e-9 else 1.0)
+    return (x - med) / denom
 
-def box_blur(img,k=3):
-    if k<=1: return img
-    pad=k//2
-    a=np.pad(img,((pad,pad),(pad,pad)),'edge')
-    out=np.zeros_like(img)
+def box_blur(img: np.ndarray, k: int = 3):
+    if k <= 1:
+        return img
+    pad = k // 2
+    a = np.pad(img, ((pad, pad), (pad, pad)), mode="edge").astype(np.float32)
+    out = np.empty_like(img, dtype=np.float32)
     for i in range(img.shape[0]):
         for j in range(img.shape[1]):
-            out[i,j]=np.mean(a[i:i+k,j:j+k])
+            out[i, j] = float(np.mean(a[i:i+k, j:j+k]))
     return out
 
-def connected_components(mask):
-    h,w=mask.shape
-    vis=np.zeros_like(mask,bool)
-    comps=[]
+def connected_components(mask: np.ndarray):
+    h, w = mask.shape
+    vis = np.zeros_like(mask, dtype=bool)
+    comps = []
     for r in range(h):
         for c in range(w):
-            if mask[r,c] and not vis[r,c]:
-                q=[(r,c)]
-                vis[r,c]=True
-                pix=[]
+            if mask[r, c] and not vis[r, c]:
+                q = deque([(r, c)])
+                vis[r, c] = True
+                pix = []
                 while q:
-                    rr,cc=q.pop()
-                    pix.append((rr,cc))
-                    for dr in (-1,0,1):
-                        for dc in (-1,0,1):
-                            nr,nc=rr+dr,cc+dc
-                            if 0<=nr<h and 0<=nc<w and mask[nr,nc] and not vis[nr,nc]:
-                                vis[nr,nc]=True
-                                q.append((nr,nc))
+                    rr, cc = q.popleft()
+                    pix.append((rr, cc))
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            if dr == 0 and dc == 0:
+                                continue
+                            nr, nc = rr + dr, cc + dc
+                            if 0 <= nr < h and 0 <= nc < w and mask[nr, nc] and not vis[nr, nc]:
+                                vis[nr, nc] = True
+                                q.append((nr, nc))
                 comps.append(pix)
     return comps
 
-def weighted_peak(rr,cc,z,X,Y):
-    w=np.abs(z[rr,cc])
-    s=np.sum(w)
-    if s<1e-9:
-        return float(Y[rr[0],cc[0]]),float(X[rr[0],cc[0]])
-    return float(np.sum(w*Y[rr,cc])/s), float(np.sum(w*X[rr,cc])/s)
+def weighted_center(rr, cc, z, X, Y):
+    w = np.abs(z[rr, cc]).astype(np.float64)
+    s = float(np.sum(w))
+    if s < 1e-12:
+        return float(Y[rr[0], cc[0]]), float(X[rr[0], cc[0]])
+    lat = float(np.sum(w * Y[rr, cc]) / s)
+    lon = float(np.sum(w * X[rr, cc]) / s)
+    return lat, lon
 
 # =========================
-# GEOLOCATION (FIXED)
+# GEOLOCATION (MOBILE FIX: parent redirect)
 # =========================
 def geo_js():
     return """
 <script>
 (function(){
-let samples=[];
-let start=Date.now();
-function done(){
- if(samples.length===0){alert("Konum alınamadı");return;}
- samples.sort((a,b)=>a.lat-b.lat);
- let lat=samples[Math.floor(samples.length/2)].lat;
- samples.sort((a,b)=>a.lon-b.lon);
- let lon=samples[Math.floor(samples.length/2)].lon;
- let u=new URL(window.parent.location.href);
- u.searchParams.set("glat",lat.toFixed(7));
- u.searchParams.set("glon",lon.toFixed(7));
- window.parent.location.href=u.toString();
-}
-function ok(p){
- if(p.coords.accuracy<80)
-   samples.push({lat:p.coords.latitude,lon:p.coords.longitude});
- if(Date.now()-start>3500){navigator.geolocation.clearWatch(w);done();}
-}
-function err(e){alert("Konum hatası");}
-let w=navigator.geolocation.watchPosition(ok,err,{enableHighAccuracy:true});
+  let samples=[];
+  let start=Date.now();
+  function done(){
+    if(samples.length===0){alert("Konum alınamadı (izin?)");return;}
+    samples.sort((a,b)=>a.lat-b.lat);
+    const mLat=samples[Math.floor(samples.length/2)].lat;
+    samples.sort((a,b)=>a.lon-b.lon);
+    const mLon=samples[Math.floor(samples.length/2)].lon;
+
+    const meanLat=samples.reduce((s,x)=>s+x.lat,0)/samples.length;
+    const meanLon=samples.reduce((s,x)=>s+x.lon,0)/samples.length;
+
+    const lat=(mLat*0.6 + meanLat*0.4);
+    const lon=(mLon*0.6 + meanLon*0.4);
+
+    const u=new URL(window.parent.location.href);
+    u.searchParams.set("glat",lat.toFixed(7));
+    u.searchParams.set("glon",lon.toFixed(7));
+    u.searchParams.set("gt",String(Date.now()));
+    window.parent.location.href=u.toString();
+  }
+  function ok(p){
+    const acc=p.coords.accuracy||9999;
+    if(acc<=80) samples.push({lat:p.coords.latitude,lon:p.coords.longitude,acc});
+    if(Date.now()-start>3500){ navigator.geolocation.clearWatch(w); done(); }
+  }
+  function err(e){ alert("Konum hatası: "+e.message); }
+  if(!navigator.geolocation){ alert("Konum desteği yok"); return; }
+  const w=navigator.geolocation.watchPosition(ok,err,{enableHighAccuracy:true,maximumAge:0,timeout:15000});
 })();
 </script>
-<div>📍 Konum alınıyor…</div>
+<div style="padding:10px;border-radius:10px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.12);">
+📍 Konum alınıyor… (stabilize)
+</div>
 """
 
-if "glat" in st.query_params:
-    st.session_state.coord=f"{st.query_params['glat']} {st.query_params['glon']}"
+# query param ile gelen konumu inputa yaz
+if "coord" not in st.session_state:
+    st.session_state.coord = "40.0000000 27.0000000"
+
+try:
+    if "glat" in st.query_params and "glon" in st.query_params:
+        st.session_state.coord = f"{float(str(st.query_params['glat'])):.7f} {float(str(st.query_params['glon'])):.7f}"
+except:
+    pass
+
+# =========================
+# TOKEN + FETCH (SAĞLAM)
+# =========================
+@st.cache_data(ttl=45*60, show_spinner=False)
+def get_token():
+    auth_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+    if "CDSE_CLIENT_ID" not in st.secrets or "CDSE_CLIENT_SECRET" not in st.secrets:
+        raise RuntimeError("Secrets eksik: CDSE_CLIENT_ID / CDSE_CLIENT_SECRET")
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": st.secrets["CDSE_CLIENT_ID"],
+        "client_secret": st.secrets["CDSE_CLIENT_SECRET"],
+    }
+    r = requests.post(auth_url, data=data, timeout=30)
+    if r.status_code != 200:
+        # JSON/HTML fark etmez, kısa göster
+        raise RuntimeError(f"Token alınamadı: HTTP {r.status_code} | {r.text[:250]}")
+    j = r.json()
+    tok = j.get("access_token")
+    if not tok:
+        raise RuntimeError("Token yanıtında access_token yok")
+    return tok
+
+def fetch_tiff_bytes(token: str, bbox, width=200, height=200):
+    evalscript = """
+    function setup() {
+      return { input: ["VV"], output: { id: "default", bands: 1, sampleType: "FLOAT32" } };
+    }
+    function evaluatePixel(sample) { return [sample.VV]; }
+    """
+    payload = {
+        "input": {
+            "bounds": {"bbox": bbox, "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"}},
+            "data": [{"type": "sentinel-1-grd"}],
+        },
+        "output": {
+            "width": width,
+            "height": height,
+            "responses": [{"identifier": "default", "format": {"type": "image/tiff"}}],
+        },
+        "evalscript": evalscript,
+    }
+    r = requests.post(
+        "https://sh.dataspace.copernicus.eu/api/v1/process",
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+        timeout=60,
+    )
+
+    ct = (r.headers.get("Content-Type") or "").lower()
+    if r.status_code != 200:
+        raise RuntimeError(f"Veri alınamadı: HTTP {r.status_code} | CT={ct} | {r.text[:300]}")
+    # TIFF kontrolü: bazen 200 dönüp JSON/HTML gelebiliyor
+    if ("tiff" not in ct) and (not r.content.startswith(b"II")) and (not r.content.startswith(b"MM")):
+        # İçerik TIFF değil gibi
+        snippet = r.content[:300]
+        try:
+            snippet = snippet.decode("utf-8", errors="ignore")
+        except:
+            snippet = str(snippet)
+        raise RuntimeError(f"TIFF değil: CT={ct} | içerik örneği: {snippet[:250]}")
+    return r.content
 
 # =========================
 # UI – SAHA MODU
 # =========================
 st.markdown("# 🛰️ Turkeller Surfer Pro")
-st.caption("SAHA MODU – Kalibre edilmiş")
-
-if "coord" not in st.session_state:
-    st.session_state.coord="40.0000000 27.0000000"
+st.caption("Saha Modu | Preset kilitli: Robust + Smoothing(k=3) + Clip 1–99 + Res 200 + OtoRefine")
 
 with st.container():
-    st.markdown('<div class="small-card">',unsafe_allow_html=True)
-    coord=st.text_input("Koordinat",st.session_state.coord)
-    lat,lon=parse_coord_pair(coord)
-    if lat: st.session_state.coord=coord
+    st.markdown('<div class="small-card">', unsafe_allow_html=True)
 
-    cap=st.slider("Tarama Çapı (m)",20,300,50)
-    esik=st.slider("Anomali Eşiği (z)",2.0,2.4,2.1,0.1)
-    topn=st.slider("TopN",1,10,5)
+    coord = st.text_input("Koordinat (tek kutu)", st.session_state.coord)
+    lat, lon = parse_coord_pair(coord)
+    if lat is not None and lon is not None:
+        st.session_state.coord = coord
 
-    if st.button("📍 Canlı Konum",use_container_width=True):
-        st.components.v1.html(geo_js(),height=80)
+    cap = st.slider("Tarama Çapı (m)", 20, 300, 50)
+    esik = st.slider("Anomali Eşiği (z)", 2.0, 2.4, 2.1, 0.1)
+    topn = st.slider("TopN", 1, 10, 5)
 
-    st.markdown('</div>',unsafe_allow_html=True)
+    colg1, colg2 = st.columns([1, 1])
+    with colg1:
+        if st.button("📍 Canlı Konum (stabil)", use_container_width=True):
+            st.components.v1.html(geo_js(), height=90)
+    with colg2:
+        st.write("")
+        st.write(f"**Mevcut:** `{st.session_state.coord}`")
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# ANALYZE
+# ANALYZE CORE (SAHA PRESET)
 # =========================
-if st.button("🔍 ANALİZ",use_container_width=True):
-    if lat is None:
-        st.error("Koordinat geçersiz")
-    else:
-        with st.spinner("Analiz..."):
-            token_url="https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
-            data={"grant_type":"client_credentials",
-                  "client_id":st.secrets["CDSE_CLIENT_ID"],
-                  "client_secret":st.secrets["CDSE_CLIENT_SECRET"]}
-            t=requests.post(token_url,data=data).json()["access_token"]
+def run_saha_analysis(lat_center, lon_center, cap_m, thr, topn):
+    # preset kilitli
+    RES = 200
+    CLIP_LO, CLIP_HI = 1, 99
+    SMOOTH_ON, SMOOTH_K = True, 3
+    AUTO_REFINE = True
 
-            bbox=bbox_from_latlon(lat,lon,cap)
-            payload={
-              "input":{"bounds":{"bbox":bbox,"properties":{"crs":"http://www.opengis.net/def/crs/OGC/1.3/CRS84"}},
-                       "data":[{"type":"sentinel-1-grd"}]},
-              "output":{"width":200,"height":200,"responses":[{"identifier":"d","format":{"type":"image/tiff"}}]},
-              "evalscript":"function setup(){return{input:['VV'],output:{bands:1}};}function evaluatePixel(s){return[s.VV];}"
-            }
-            r=requests.post("https://sh.dataspace.copernicus.eu/api/v1/process",
-                headers={"Authorization":f"Bearer {t}"},json=payload)
-            Z=tiff.imread(io.BytesIO(r.content)).astype(np.float32)
-            Zdb=10*np.log10(np.maximum(Z,1e-9))
-            Zdb=box_blur(Zdb,3)
-            Zz=robust_z(Zdb)
+    token = get_token()
 
-            mask=Zz>=esik
-            comps=connected_components(mask)
+    def single_pass(latc, lonc, capx):
+        bbox = bbox_from_latlon(latc, lonc, capx)
+        tiff_bytes = fetch_tiff_bytes(token, bbox, width=RES, height=RES)
+        Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
 
-            X,Y=np.meshgrid(np.linspace(bbox[0],bbox[2],Z.shape[1]),
-                            np.linspace(bbox[1],bbox[3],Z.shape[0]))
+        eps = 1e-10
+        Zdb = 10.0 * np.log10(np.maximum(Z, eps))
 
-            ranked=[]
+        v = Zdb[~np.isnan(Zdb)]
+        p1, p99 = np.percentile(v, [CLIP_LO, CLIP_HI])
+        Zdb = np.clip(Zdb, p1, p99)
+
+        if SMOOTH_ON:
+            Zdb = box_blur(Zdb.astype(np.float32), SMOOTH_K)
+
+        Zz = robust_z(Zdb)
+
+        H, W = Zdb.shape
+        X, Y = np.meshgrid(
+            np.linspace(bbox[0], bbox[2], W),
+            np.linspace(bbox[1], bbox[3], H),
+        )
+
+        # POS/NEG birlikte (saha okuması için)
+        pos_mask = (Zz >= thr)
+        neg_mask = (Zz <= -thr)
+
+        comps_pos = connected_components(pos_mask) if np.any(pos_mask) else []
+        comps_neg = connected_components(neg_mask) if np.any(neg_mask) else []
+
+        ranked = []
+
+        def add_comps(comps, typ):
             for pix in comps:
-                rr=np.array([p[0] for p in pix])
-                cc=np.array([p[1] for p in pix])
-                k=np.argmax(Zz[rr,cc])
-                lat_t,lon_t=weighted_peak(rr,cc,Zz,X,Y)
-                score=float(np.max(Zz[rr,cc])*math.log(len(pix)+1))
-                ranked.append({"lat":lat_t,"lon":lon_t,"score":score})
+                rr = np.array([p[0] for p in pix], dtype=int)
+                cc = np.array([p[1] for p in pix], dtype=int)
+                vals = Zz[rr, cc]
+                k = int(np.argmax(vals)) if typ == "POS" else int(np.argmin(vals))
+                peak_z = float(vals[k])
+                peak_abs = abs(peak_z)
+                area = int(len(pix))
+                score = float(peak_abs * math.log1p(area))
 
-            ranked=sorted(ranked,key=lambda x:x["score"],reverse=True)[:topn]
+                # peak pixel
+                pr = int(rr[k]); pc = int(cc[k])
+                peak_lat = float(Y[pr, pc]); peak_lon = float(X[pr, pc])
 
-            fig=go.Figure(go.Heatmap(z=Zdb,x=X[0],y=Y[:,0]))
-            for i,tg in enumerate(ranked,1):
-                fig.add_trace(go.Scatter(x=[tg["lon"]],y=[tg["lat"]],
-                    mode="markers+text",text=[f"#{i}"]))
-            st.plotly_chart(fig,use_container_width=True)
+                # target (weighted center) — stabil
+                tgt_lat, tgt_lon = weighted_center(rr, cc, Zz, X, Y)
 
-            for i,tg in enumerate(ranked,1):
-                st.success(f"#{i}  {tg['lat']:.7f} {tg['lon']:.7f}  score={tg['score']:.2f}")
-                st.link_button("Haritada Aç",
-                    f"https://www.google.com/maps/search/?api=1&query={tg['lat']},{tg['lon']}")
+                ranked.append({
+                    "type": typ,
+                    "score": score,
+                    "peak_z": peak_z,
+                    "area": area,
+                    "peak_lat": peak_lat,
+                    "peak_lon": peak_lon,
+                    "target_lat": float(tgt_lat),
+                    "target_lon": float(tgt_lon),
+                })
+
+        add_comps(comps_pos, "POS")
+        add_comps(comps_neg, "NEG")
+        ranked.sort(key=lambda d: d["score"], reverse=True)
+        return bbox, Zdb, X, Y, Zz, ranked
+
+    # 1) geniş tarama
+    bbox1, Zdb1, X1, Y1, Zz1, ranked1 = single_pass(lat_center, lon_center, cap_m)
+    top1 = ranked1[0] if ranked1 else None
+
+    # 2) oto refine (top1 target merkezine)
+    if AUTO_REFINE and top1 and cap_m > 25:
+        cap2 = max(20, min(30, int(cap_m * 0.5)))
+        bbox2, Zdb2, X2, Y2, Zz2, ranked2 = single_pass(top1["target_lat"], top1["target_lon"], cap2)
+        return True, cap2, bbox2, Zdb2, X2, Y2, Zz2, ranked2[:topn]
+    else:
+        return False, None, bbox1, Zdb1, X1, Y1, Zz1, ranked1[:topn]
+
+# =========================
+# ANALYZE BUTTON
+# =========================
+if st.button("🔍 ANALİZ", use_container_width=True):
+    if lat is None or lon is None:
+        st.error("Koordinat geçersiz. Örn: 40.1048440 27.7690640")
+    else:
+        with st.spinner("🛰️ Veri çekiliyor..."):
+            try:
+                refined, cap2, bbox, Zdb, X, Y, Zz, top = run_saha_analysis(lat, lon, cap, float(esik), int(topn))
+
+                if refined:
+                    st.success(f"✅ Oto Refine: Top1 merkezine {cap2}m ile tekrar tarandı.")
+
+                # Heatmap
+                fig = go.Figure()
+                fig.add_trace(go.Heatmap(z=Zdb, x=X[0, :], y=Y[:, 0], colorbar=dict(title="VV (dB)")))
+
+                for i, t in enumerate(top, start=1):
+                    fig.add_trace(go.Scatter(
+                        x=[t["target_lon"]],
+                        y=[t["target_lat"]],
+                        mode="markers+text",
+                        text=[f"#{i}"],
+                        textposition="top center",
+                        marker=dict(size=10),
+                        name=f"#{i}"
+                    ))
+
+                fig.update_layout(height=520, margin=dict(l=0, r=0, t=30, b=0), title="2D Heatmap (TARGET)")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # List
+                st.markdown("---")
+                st.subheader(f"🎯 Top {len(top)} (Saha Modu)")
+
+                if not top:
+                    st.info("Bu eşikte hedef çıkmadı. Eşiği 2.0’a çekmeyi dene.")
+                else:
+                    for i, t in enumerate(top, start=1):
+                        tag = "🟢 POS" if t["type"] == "POS" else "🔴 NEG"
+                        st.markdown(f"**#{i} {tag}** | score=`{t['score']:.2f}` | peak z=`{t['peak_z']:.2f}` | alan=`{t['area']}` px")
+                        st.code(f"{t['target_lat']:.8f} {t['target_lon']:.8f}", language="text")
+                        maps_url = f"https://www.google.com/maps/search/?api=1&query={t['target_lat']},{t['target_lon']}"
+                        st.link_button("🌍 Haritada Aç", maps_url, use_container_width=True)
+
+                        with st.expander("Debug (Peak koordinat)", expanded=False):
+                            st.code(f"{t['peak_lat']:.8f} {t['peak_lon']:.8f}", language="text")
+
+                        st.divider()
+
+            except Exception as e:
+                st.error(f"❌ Analiz hata: {e}")
+
+st.caption("Turkeller Surfer Pro | Saha Modu | TIFF kontrol + konum parent redirect fix")
