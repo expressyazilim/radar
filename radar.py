@@ -7,7 +7,6 @@ import io
 import tifffile as tiff
 import re
 from collections import deque
-from datetime import datetime
 
 # =========================
 # PAGE CONFIG
@@ -52,7 +51,6 @@ def login():
         else:
             st.error("Hatalı şifre")
 
-    # autologin kontrol
     st.components.v1.html("""
     <script>
     try{
@@ -157,7 +155,7 @@ def weighted_center(rr, cc, z, X, Y):
     return lat, lon
 
 # =========================
-# GEOLOCATION (MOBILE FIX: parent redirect)
+# GEOLOCATION (PARENT REDIRECT)
 # =========================
 def geo_js():
     return """
@@ -199,7 +197,6 @@ def geo_js():
 </div>
 """
 
-# query param ile gelen konumu inputa yaz
 if "coord" not in st.session_state:
     st.session_state.coord = "40.0000000 27.0000000"
 
@@ -210,7 +207,7 @@ except:
     pass
 
 # =========================
-# TOKEN + FETCH (SAĞLAM)
+# TOKEN + FETCH (ROBUST)
 # =========================
 @st.cache_data(ttl=45*60, show_spinner=False)
 def get_token():
@@ -224,10 +221,8 @@ def get_token():
     }
     r = requests.post(auth_url, data=data, timeout=30)
     if r.status_code != 200:
-        # JSON/HTML fark etmez, kısa göster
         raise RuntimeError(f"Token alınamadı: HTTP {r.status_code} | {r.text[:250]}")
-    j = r.json()
-    tok = j.get("access_token")
+    tok = r.json().get("access_token")
     if not tok:
         raise RuntimeError("Token yanıtında access_token yok")
     return tok
@@ -257,13 +252,10 @@ def fetch_tiff_bytes(token: str, bbox, width=200, height=200):
         json=payload,
         timeout=60,
     )
-
     ct = (r.headers.get("Content-Type") or "").lower()
     if r.status_code != 200:
         raise RuntimeError(f"Veri alınamadı: HTTP {r.status_code} | CT={ct} | {r.text[:300]}")
-    # TIFF kontrolü: bazen 200 dönüp JSON/HTML gelebiliyor
     if ("tiff" not in ct) and (not r.content.startswith(b"II")) and (not r.content.startswith(b"MM")):
-        # İçerik TIFF değil gibi
         snippet = r.content[:300]
         try:
             snippet = snippet.decode("utf-8", errors="ignore")
@@ -273,10 +265,99 @@ def fetch_tiff_bytes(token: str, bbox, width=200, height=200):
     return r.content
 
 # =========================
+# SAHA ANALYSIS (2D+3D)
+# =========================
+def run_saha_analysis(lat_center, lon_center, cap_m, thr, topn):
+    # Preset kilitli
+    RES = 200
+    CLIP_LO, CLIP_HI = 1, 99
+    SMOOTH_K = 3
+    AUTO_REFINE = True
+
+    token = get_token()
+
+    def single_pass(latc, lonc, capx):
+        bbox = bbox_from_latlon(latc, lonc, capx)
+        tiff_bytes = fetch_tiff_bytes(token, bbox, width=RES, height=RES)
+        Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
+
+        eps = 1e-10
+        Zdb = 10.0 * np.log10(np.maximum(Z, eps))
+
+        v = Zdb[~np.isnan(Zdb)]
+        p1, p99 = np.percentile(v, [CLIP_LO, CLIP_HI])
+        Zdb = np.clip(Zdb, p1, p99)
+
+        Zdb = box_blur(Zdb.astype(np.float32), SMOOTH_K)
+        Zz = robust_z(Zdb)
+
+        H, W = Zdb.shape
+        X, Y = np.meshgrid(
+            np.linspace(bbox[0], bbox[2], W),
+            np.linspace(bbox[1], bbox[3], H),
+        )
+
+        pos_mask = (Zz >= thr)
+        neg_mask = (Zz <= -thr)
+
+        comps_pos = connected_components(pos_mask) if np.any(pos_mask) else []
+        comps_neg = connected_components(neg_mask) if np.any(neg_mask) else []
+
+        ranked = []
+
+        def add_comps(comps, typ):
+            for pix in comps:
+                rr = np.array([p[0] for p in pix], dtype=int)
+                cc = np.array([p[1] for p in pix], dtype=int)
+                vals = Zz[rr, cc]
+                k = int(np.argmax(vals)) if typ == "POS" else int(np.argmin(vals))
+                peak_z = float(vals[k])
+                peak_abs = abs(peak_z)
+                area = int(len(pix))
+                score = float(peak_abs * math.log1p(area))
+
+                pr = int(rr[k]); pc = int(cc[k])
+                peak_lat = float(Y[pr, pc]); peak_lon = float(X[pr, pc])
+
+                tgt_lat, tgt_lon = weighted_center(rr, cc, Zz, X, Y)
+
+                # 3D için hedefin z değeri: o pikselin Zdb değeri
+                tgt_r = int(np.clip(int(np.round((tgt_lat - bbox[1]) / (bbox[3] - bbox[1]) * (H - 1))), 0, H-1))
+                tgt_c = int(np.clip(int(np.round((tgt_lon - bbox[0]) / (bbox[2] - bbox[0]) * (W - 1))), 0, W-1))
+                tgt_db = float(Zdb[tgt_r, tgt_c])
+
+                ranked.append({
+                    "type": typ,
+                    "score": score,
+                    "peak_z": peak_z,
+                    "area": area,
+                    "peak_lat": peak_lat,
+                    "peak_lon": peak_lon,
+                    "target_lat": float(tgt_lat),
+                    "target_lon": float(tgt_lon),
+                    "target_db": tgt_db,
+                })
+
+        add_comps(comps_pos, "POS")
+        add_comps(comps_neg, "NEG")
+        ranked.sort(key=lambda d: d["score"], reverse=True)
+        return bbox, Zdb, X, Y, Zz, ranked
+
+    bbox1, Zdb1, X1, Y1, Zz1, ranked1 = single_pass(lat_center, lon_center, cap_m)
+    top1 = ranked1[0] if ranked1 else None
+
+    if AUTO_REFINE and top1 and cap_m > 25:
+        cap2 = max(20, min(30, int(cap_m * 0.5)))
+        bbox2, Zdb2, X2, Y2, Zz2, ranked2 = single_pass(top1["target_lat"], top1["target_lon"], cap2)
+        return True, cap2, bbox2, Zdb2, X2, Y2, Zz2, ranked2[:topn]
+    else:
+        return False, None, bbox1, Zdb1, X1, Y1, Zz1, ranked1[:topn]
+
+# =========================
 # UI – SAHA MODU
 # =========================
 st.markdown("# 🛰️ Turkeller Surfer Pro")
-st.caption("Saha Modu | Preset kilitli: Robust + Smoothing(k=3) + Clip 1–99 + Res 200 + OtoRefine")
+st.caption("Saha Modu | 2D + 3D | Robust + Smooth(k=3) + Clip 1–99 + Res 200 + OtoRefine")
 
 with st.container():
     st.markdown('<div class="small-card">', unsafe_allow_html=True)
@@ -301,96 +382,6 @@ with st.container():
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# ANALYZE CORE (SAHA PRESET)
-# =========================
-def run_saha_analysis(lat_center, lon_center, cap_m, thr, topn):
-    # preset kilitli
-    RES = 200
-    CLIP_LO, CLIP_HI = 1, 99
-    SMOOTH_ON, SMOOTH_K = True, 3
-    AUTO_REFINE = True
-
-    token = get_token()
-
-    def single_pass(latc, lonc, capx):
-        bbox = bbox_from_latlon(latc, lonc, capx)
-        tiff_bytes = fetch_tiff_bytes(token, bbox, width=RES, height=RES)
-        Z = tiff.imread(io.BytesIO(tiff_bytes)).astype(np.float32)
-
-        eps = 1e-10
-        Zdb = 10.0 * np.log10(np.maximum(Z, eps))
-
-        v = Zdb[~np.isnan(Zdb)]
-        p1, p99 = np.percentile(v, [CLIP_LO, CLIP_HI])
-        Zdb = np.clip(Zdb, p1, p99)
-
-        if SMOOTH_ON:
-            Zdb = box_blur(Zdb.astype(np.float32), SMOOTH_K)
-
-        Zz = robust_z(Zdb)
-
-        H, W = Zdb.shape
-        X, Y = np.meshgrid(
-            np.linspace(bbox[0], bbox[2], W),
-            np.linspace(bbox[1], bbox[3], H),
-        )
-
-        # POS/NEG birlikte (saha okuması için)
-        pos_mask = (Zz >= thr)
-        neg_mask = (Zz <= -thr)
-
-        comps_pos = connected_components(pos_mask) if np.any(pos_mask) else []
-        comps_neg = connected_components(neg_mask) if np.any(neg_mask) else []
-
-        ranked = []
-
-        def add_comps(comps, typ):
-            for pix in comps:
-                rr = np.array([p[0] for p in pix], dtype=int)
-                cc = np.array([p[1] for p in pix], dtype=int)
-                vals = Zz[rr, cc]
-                k = int(np.argmax(vals)) if typ == "POS" else int(np.argmin(vals))
-                peak_z = float(vals[k])
-                peak_abs = abs(peak_z)
-                area = int(len(pix))
-                score = float(peak_abs * math.log1p(area))
-
-                # peak pixel
-                pr = int(rr[k]); pc = int(cc[k])
-                peak_lat = float(Y[pr, pc]); peak_lon = float(X[pr, pc])
-
-                # target (weighted center) — stabil
-                tgt_lat, tgt_lon = weighted_center(rr, cc, Zz, X, Y)
-
-                ranked.append({
-                    "type": typ,
-                    "score": score,
-                    "peak_z": peak_z,
-                    "area": area,
-                    "peak_lat": peak_lat,
-                    "peak_lon": peak_lon,
-                    "target_lat": float(tgt_lat),
-                    "target_lon": float(tgt_lon),
-                })
-
-        add_comps(comps_pos, "POS")
-        add_comps(comps_neg, "NEG")
-        ranked.sort(key=lambda d: d["score"], reverse=True)
-        return bbox, Zdb, X, Y, Zz, ranked
-
-    # 1) geniş tarama
-    bbox1, Zdb1, X1, Y1, Zz1, ranked1 = single_pass(lat_center, lon_center, cap_m)
-    top1 = ranked1[0] if ranked1 else None
-
-    # 2) oto refine (top1 target merkezine)
-    if AUTO_REFINE and top1 and cap_m > 25:
-        cap2 = max(20, min(30, int(cap_m * 0.5)))
-        bbox2, Zdb2, X2, Y2, Zz2, ranked2 = single_pass(top1["target_lat"], top1["target_lon"], cap2)
-        return True, cap2, bbox2, Zdb2, X2, Y2, Zz2, ranked2[:topn]
-    else:
-        return False, None, bbox1, Zdb1, X1, Y1, Zz1, ranked1[:topn]
-
-# =========================
 # ANALYZE BUTTON
 # =========================
 if st.button("🔍 ANALİZ", use_container_width=True):
@@ -404,12 +395,12 @@ if st.button("🔍 ANALİZ", use_container_width=True):
                 if refined:
                     st.success(f"✅ Oto Refine: Top1 merkezine {cap2}m ile tekrar tarandı.")
 
-                # Heatmap
-                fig = go.Figure()
-                fig.add_trace(go.Heatmap(z=Zdb, x=X[0, :], y=Y[:, 0], colorbar=dict(title="VV (dB)")))
-
+                # ----------------- 2D
+                st.subheader("🗺️ 2D Heatmap (VV dB)")
+                fig2d = go.Figure()
+                fig2d.add_trace(go.Heatmap(z=Zdb, x=X[0, :], y=Y[:, 0], colorbar=dict(title="VV (dB)")))
                 for i, t in enumerate(top, start=1):
-                    fig.add_trace(go.Scatter(
+                    fig2d.add_trace(go.Scatter(
                         x=[t["target_lon"]],
                         y=[t["target_lat"]],
                         mode="markers+text",
@@ -418,30 +409,65 @@ if st.button("🔍 ANALİZ", use_container_width=True):
                         marker=dict(size=10),
                         name=f"#{i}"
                     ))
+                fig2d.update_layout(height=520, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig2d, use_container_width=True)
 
-                fig.update_layout(height=520, margin=dict(l=0, r=0, t=30, b=0), title="2D Heatmap (TARGET)")
-                st.plotly_chart(fig, use_container_width=True)
+                # ----------------- 3D
+                st.subheader("🧊 3D Surface (VV dB) + Hedefler")
+                surf = go.Surface(
+                    z=Zdb,
+                    x=X,
+                    y=Y,
+                    hovertemplate="<b>Lon</b>:%{x:.6f}<br><b>Lat</b>:%{y:.6f}<br><b>VV(dB)</b>:%{z:.2f}<extra></extra>"
+                )
+                fig3d = go.Figure(data=[surf])
 
-                # List
+                # hedefleri 3D scatter olarak koy
+                if top:
+                    xs = [t["target_lon"] for t in top]
+                    ys = [t["target_lat"] for t in top]
+                    zs = [t.get("target_db", float("nan")) for t in top]
+                    labels = [f"#{i} {t['type']} z={t['peak_z']:.2f}" for i, t in enumerate(top, start=1)]
+                    fig3d.add_trace(go.Scatter3d(
+                        x=xs, y=ys, z=zs,
+                        mode="markers+text",
+                        text=[f"#{i}" for i in range(1, len(top)+1)],
+                        textposition="top center",
+                        marker=dict(size=4),
+                        hovertext=labels,
+                        hoverinfo="text"
+                    ))
+
+                fig3d.update_layout(
+                    height=520,
+                    margin=dict(l=0, r=0, t=30, b=0),
+                    scene=dict(
+                        xaxis_title="Boylam",
+                        yaxis_title="Enlem",
+                        zaxis_title="VV (dB)",
+                        aspectratio=dict(x=1, y=1, z=0.55),
+                        camera=dict(eye=dict(x=1.4, y=1.4, z=0.8))
+                    )
+                )
+                st.plotly_chart(fig3d, use_container_width=True)
+
+                # ----------------- List
                 st.markdown("---")
                 st.subheader(f"🎯 Top {len(top)} (Saha Modu)")
-
                 if not top:
                     st.info("Bu eşikte hedef çıkmadı. Eşiği 2.0’a çekmeyi dene.")
                 else:
                     for i, t in enumerate(top, start=1):
                         tag = "🟢 POS" if t["type"] == "POS" else "🔴 NEG"
-                        st.markdown(f"**#{i} {tag}** | score=`{t['score']:.2f}` | peak z=`{t['peak_z']:.2f}` | alan=`{t['area']}` px")
+                        st.markdown(f"**#{i} {tag}** | score=`{t['score']:.2f}` | peak z=`{t['peak_z']:.2f}` | alan=`{t['area']}` px | dB@target=`{t.get('target_db',0):.2f}`")
                         st.code(f"{t['target_lat']:.8f} {t['target_lon']:.8f}", language="text")
                         maps_url = f"https://www.google.com/maps/search/?api=1&query={t['target_lat']},{t['target_lon']}"
                         st.link_button("🌍 Haritada Aç", maps_url, use_container_width=True)
-
                         with st.expander("Debug (Peak koordinat)", expanded=False):
                             st.code(f"{t['peak_lat']:.8f} {t['peak_lon']:.8f}", language="text")
-
                         st.divider()
 
             except Exception as e:
                 st.error(f"❌ Analiz hata: {e}")
 
-st.caption("Turkeller Surfer Pro | Saha Modu | TIFF kontrol + konum parent redirect fix")
+st.caption("Turkeller Surfer Pro | Saha Modu | 2D+3D aktif")
